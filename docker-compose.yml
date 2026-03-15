@@ -11,3 +11,4 @@ services:
       - ./config.json:/app/config.json:ro
       - ./recordings:/app/recordings
       - ./streams:/app/streams
+      - ./data:/app/data
