@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Home Camera — Recordings</title>
+    <meta name="description" content="Browse and playback camera recordings">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+    <div class="scanline-overlay"></div>
+
+    <!-- Top Navigation Bar -->
+    <header class="top-bar">
+        <div class="top-bar-left">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                        <circle cx="12" cy="13" r="4" />
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <span class="logo-title">AI HOME<span class="accent">CAM</span></span>
+                    <span class="logo-subtitle">SURVEILLANCE SYSTEM v1.0</span>
+                </div>
+            </div>
+        </div>
+        <nav class="top-bar-center">
+            <a href="index.html" class="nav-link" id="nav-dashboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7" />
+                    <rect x="14" y="3" width="7" height="7" />
+                    <rect x="3" y="14" width="7" height="7" />
+                    <rect x="14" y="14" width="7" height="7" />
+                </svg>
+                DASHBOARD
+            </a>
+            <a href="recordings.html" class="nav-link active" id="nav-recordings">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polygon points="10 8 16 12 10 16 10 8" />
+                </svg>
+                RECORDINGS
+            </a>
+        </nav>
+        <div class="top-bar-right">
+            <div class="clock" id="system-clock">00:00:00</div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="recordings-page">
+        <!-- Filters -->
+        <div class="recordings-header">
+            <h1 class="page-title">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polygon points="10 8 16 12 10 16 10 8" />
+                </svg>
+                RECORDINGS <span class="accent">ARCHIVE</span>
+            </h1>
+            <div class="filter-bar">
+                <div class="filter-group">
+                    <label class="filter-label">CAMERA</label>
+                    <select id="filter-camera" class="cyber-select">
+                        <option value="all">ALL CAMERAS</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">SORT</label>
+                    <select id="filter-sort" class="cyber-select">
+                        <option value="newest">NEWEST FIRST</option>
+                        <option value="oldest">OLDEST FIRST</option>
+                        <option value="largest">LARGEST FIRST</option>
+                    </select>
+                </div>
+                <button class="cyber-btn btn-refresh" id="btn-refresh">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10" />
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                    REFRESH
+                </button>
+            </div>
+        </div>
+
+        <!-- Recordings List -->
+        <div class="recordings-list" id="recordings-list">
+            <div class="loading-state">
+                <div class="cyber-spinner"></div>
+                <p>SCANNING ARCHIVE...</p>
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state hidden" id="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"
+                opacity="0.3">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <p class="empty-text">NO RECORDINGS FOUND</p>
+            <p class="empty-subtext">Start recording from the dashboard to see files here</p>
+        </div>
+    </main>
+
+    <!-- Playback Modal -->
+    <div class="playback-modal" id="playback-modal">
+        <div class="playback-content">
+            <div class="playback-header">
+                <span class="playback-title" id="playback-title">Recording</span>
+                <button class="btn-close-playback" id="btn-close-playback">✕ CLOSE</button>
+            </div>
+            <video id="playback-video" controls autoplay></video>
+            <div class="playback-info" id="playback-info"></div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="confirm-modal" id="confirm-modal">
+        <div class="confirm-content">
+            <div class="confirm-icon">⚠</div>
+            <h3>DELETE RECORDING?</h3>
+            <p id="confirm-filename">filename.mp4</p>
+            <p class="confirm-warning">This action cannot be undone.</p>
+            <div class="confirm-actions">
+                <button class="cyber-btn btn-cancel" id="btn-cancel-delete">CANCEL</button>
+                <button class="cyber-btn btn-danger" id="btn-confirm-delete">DELETE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="js/recordings.js"></script>
+</body>
+
+</html>

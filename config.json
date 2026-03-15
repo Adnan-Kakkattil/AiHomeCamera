@@ -1,0 +1,21 @@
+{
+  "cameras": [
+    {
+      "id": "cam1",
+      "name": "Camera 1 - Front",
+      "ip": "192.168.31.135",
+      "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_0",
+      "port": 554
+    },
+    {
+      "id": "cam2",
+      "name": "Camera 2 - Back",
+      "ip": "192.168.31.94",
+      "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_0",
+      "port": 554
+    }
+  ],
+  "serverPort": 3000,
+  "recordingsDir": "./recordings",
+  "streamsDir": "./streams"
+}

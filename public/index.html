@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Home Camera — Surveillance Dashboard</title>
+  <meta name="description" content="Self-hosted home camera monitoring system with live RTSP streaming and recording">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Scanline overlay -->
+  <div class="scanline-overlay"></div>
+
+  <!-- Top Navigation Bar -->
+  <header class="top-bar">
+    <div class="top-bar-left">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="logo-title">AI HOME<span class="accent">CAM</span></span>
+          <span class="logo-subtitle">SURVEILLANCE SYSTEM v1.0</span>
+        </div>
+      </div>
+    </div>
+    <nav class="top-bar-center">
+      <a href="index.html" class="nav-link active" id="nav-dashboard">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        DASHBOARD
+      </a>
+      <a href="recordings.html" class="nav-link" id="nav-recordings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        RECORDINGS
+      </a>
+    </nav>
+    <div class="top-bar-right">
+      <div class="status-indicators">
+        <div class="status-item" id="server-status">
+          <span class="status-dot online"></span>
+          <span class="status-label">SERVER</span>
+        </div>
+        <div class="status-item" id="cameras-online">
+          <span class="status-dot" id="cam-status-dot"></span>
+          <span class="status-label" id="cam-count-label">0/2 ONLINE</span>
+        </div>
+      </div>
+      <div class="clock" id="system-clock">00:00:00</div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="dashboard">
+    <!-- System Stats Bar -->
+    <div class="stats-bar">
+      <div class="stat-item">
+        <span class="stat-icon">◉</span>
+        <span class="stat-value" id="stat-streaming">0</span>
+        <span class="stat-label">STREAMING</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon recording-pulse">⏺</span>
+        <span class="stat-value" id="stat-recording">0</span>
+        <span class="stat-label">RECORDING</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon">📁</span>
+        <span class="stat-value" id="stat-saved">0</span>
+        <span class="stat-label">SAVED</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon">📅</span>
+        <span class="stat-value" id="stat-date">--</span>
+        <span class="stat-label">DATE</span>
+      </div>
+    </div>
+
+    <!-- Camera Grid -->
+    <div class="camera-grid" id="camera-grid">
+      <!-- Camera cards will be injected by JS -->
+    </div>
+  </main>
+
+  <!-- Fullscreen Video Modal -->
+  <div class="fullscreen-modal" id="fullscreen-modal">
+    <div class="fullscreen-header">
+      <span class="fullscreen-title" id="fullscreen-title">Camera</span>
+      <button class="btn-close-fullscreen" id="btn-close-fullscreen">✕ EXIT</button>
+    </div>
+    <video id="fullscreen-video" autoplay muted></video>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.14/dist/hls.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
