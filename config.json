@@ -7,6 +7,19 @@
       "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_0",
       "ffmpegVideoFilter": "crop=in_w:in_h/2:0:0",
       "disableRtspProbe": true,
+      "qualityMode": "hd",
+      "streamQualityProfiles": {
+        "hd": { "fps": 15, "gop": 30, "crf": 23, "scaleWidth": null },
+        "sd": { "fps": 10, "gop": 20, "crf": 30, "scaleWidth": 960 }
+      },
+      "motionDetection": {
+        "enabled": true,
+        "threshold": 0.08,
+        "cooldownMs": 15000,
+        "recordDurationSec": 120,
+        "screenshotOnMotion": true,
+        "autoRecordOnMotion": true
+      },
       "username": "admin",
       "password": "Adnan@66202",
       "port": 554
@@ -18,6 +31,19 @@
       "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_0",
       "ffmpegVideoFilter": "crop=in_w:in_h/2:0:in_h/2",
       "disableRtspProbe": true,
+      "qualityMode": "hd",
+      "streamQualityProfiles": {
+        "hd": { "fps": 15, "gop": 30, "crf": 23, "scaleWidth": null },
+        "sd": { "fps": 10, "gop": 20, "crf": 30, "scaleWidth": 960 }
+      },
+      "motionDetection": {
+        "enabled": true,
+        "threshold": 0.08,
+        "cooldownMs": 15000,
+        "recordDurationSec": 120,
+        "screenshotOnMotion": true,
+        "autoRecordOnMotion": true
+      },
       "ptz": {
         "enabled": true,
         "protocol": "onvif",
@@ -39,6 +65,19 @@
       "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_0",
       "ffmpegVideoFilter": "crop=in_w:in_h/2:0:0",
       "disableRtspProbe": true,
+      "qualityMode": "hd",
+      "streamQualityProfiles": {
+        "hd": { "fps": 15, "gop": 30, "crf": 23, "scaleWidth": null },
+        "sd": { "fps": 10, "gop": 20, "crf": 30, "scaleWidth": 960 }
+      },
+      "motionDetection": {
+        "enabled": true,
+        "threshold": 0.08,
+        "cooldownMs": 15000,
+        "recordDurationSec": 120,
+        "screenshotOnMotion": true,
+        "autoRecordOnMotion": true
+      },
       "username": "admin",
       "password": "Adnan@66202",
       "port": 554
@@ -50,6 +89,19 @@
       "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_0",
       "ffmpegVideoFilter": "crop=in_w:in_h/2:0:in_h/2",
       "disableRtspProbe": true,
+      "qualityMode": "hd",
+      "streamQualityProfiles": {
+        "hd": { "fps": 15, "gop": 30, "crf": 23, "scaleWidth": null },
+        "sd": { "fps": 10, "gop": 20, "crf": 30, "scaleWidth": 960 }
+      },
+      "motionDetection": {
+        "enabled": true,
+        "threshold": 0.08,
+        "cooldownMs": 15000,
+        "recordDurationSec": 120,
+        "screenshotOnMotion": true,
+        "autoRecordOnMotion": true
+      },
       "ptz": {
         "enabled": true,
         "protocol": "onvif",

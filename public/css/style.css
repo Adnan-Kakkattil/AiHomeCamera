@@ -543,6 +543,10 @@ body::before {
   border-top: 1px solid var(--border-color);
 }
 
+.camera-controls.camera-controls-secondary {
+  padding-top: 0;
+}
+
 .cam-btn {
   display: flex;
   align-items: center;
@@ -590,6 +594,20 @@ body::before {
   color: var(--neon-orange);
   border-color: rgba(255, 102, 34, 0.4);
   background: rgba(255, 102, 34, 0.1);
+}
+
+.cam-btn.btn-quality:hover {
+  color: var(--neon-cyan);
+}
+
+.cam-btn.btn-motion {
+  color: var(--text-secondary);
+}
+
+.cam-btn.btn-motion.active {
+  color: var(--neon-green);
+  border-color: rgba(0, 255, 136, 0.35);
+  background: var(--neon-green-dim);
 }
 
 /* PTZ controls */

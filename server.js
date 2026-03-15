@@ -31,6 +31,17 @@ const streamProcesses = {};   // { camId: childProcess }
 const recordProcesses = {};   // { camId: { process, filename, startTime } }
 const resolvedRtspSources = {}; // { camId: { url, fingerprint, duplicate } }
 const ptzClients = {}; // { camId: onvif.Cam instance }
+const motionProcesses = {}; // { camId: childProcess }
+const motionLastTriggerAt = {}; // { camId: timestampMs }
+const motionRecordTimers = {}; // { camId: timeoutId }
+const cameraRuntime = {}; // { camId: { qualityMode, motionEnabled } }
+
+config.cameras.forEach((camera) => {
+    cameraRuntime[camera.id] = {
+        qualityMode: String(camera.qualityMode || 'hd').toLowerCase() === 'sd' ? 'sd' : 'hd',
+        motionEnabled: !!camera.motionDetection?.enabled
+    };
+});
 
 function dbRun(sql, params = []) {
     return new Promise((resolve, reject) => {
@@ -171,12 +182,36 @@ function getPtzConfig(camera) {
 }
 
 function getCameraPublicData(camera) {
+    const runtime = cameraRuntime[camera.id] || { qualityMode: 'hd', motionEnabled: false };
     return {
         id: camera.id,
         name: camera.name,
         ip: camera.ip,
         port: camera.port,
-        ptzEnabled: !!getPtzConfig(camera)
+        ptzEnabled: !!getPtzConfig(camera),
+        qualityMode: runtime.qualityMode,
+        motionEnabled: runtime.motionEnabled
+    };
+}
+
+function getQualityProfile(camera) {
+    const mode = cameraRuntime[camera.id]?.qualityMode || 'hd';
+    const defaults = {
+        hd: { fps: 15, gop: 30, crf: 23, scaleWidth: null },
+        sd: { fps: 10, gop: 20, crf: 30, scaleWidth: 960 }
+    };
+    const customProfiles = camera.streamQualityProfiles || {};
+    return { mode, ...defaults[mode], ...(customProfiles[mode] || {}) };
+}
+
+function getMotionConfig(camera) {
+    const cfg = camera.motionDetection || {};
+    return {
+        threshold: Number(cfg.threshold ?? 0.08),
+        cooldownMs: Math.max(1000, Number(cfg.cooldownMs ?? 15000)),
+        recordDurationSec: Math.max(10, Number(cfg.recordDurationSec ?? 120)),
+        screenshotOnMotion: cfg.screenshotOnMotion !== false,
+        autoRecordOnMotion: cfg.autoRecordOnMotion !== false
     };
 }
 
@@ -250,6 +285,155 @@ function getPtzVector(direction, speed) {
     }
 }
 
+function stopMotionRecordingTimer(camId) {
+    if (motionRecordTimers[camId]) {
+        clearTimeout(motionRecordTimers[camId]);
+        delete motionRecordTimers[camId];
+    }
+}
+
+function captureScreenshotInternal(camera, reason = 'manual') {
+    return new Promise((resolve, reject) => {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `screenshot_${camera.id}_${timestamp}.jpg`;
+        const filepath = path.join(recordingsDir, filename);
+        const rtspSource = getCameraRtspUrl(camera);
+        const args = [
+            '-fflags', '+genpts+discardcorrupt',
+            '-rtsp_transport', 'tcp',
+            '-use_wallclock_as_timestamps', '1',
+            '-i', rtspSource
+        ];
+
+        appendCameraVideoFilterArgs(camera, args);
+        args.push('-frames:v', '1', '-q:v', '2', filepath);
+
+        const proc = spawn('ffmpeg', args);
+        proc.on('close', (code) => {
+            if (code === 0) {
+                logUserAction('screenshot_capture', camera, {
+                    filename,
+                    path: filepath,
+                    reason
+                });
+                resolve({ success: true, filename, url: `/recordings-files/${filename}` });
+            } else {
+                reject(new Error('Screenshot failed'));
+            }
+        });
+        proc.on('error', (err) => reject(err));
+    });
+}
+
+function scheduleMotionAutoStop(camera, durationSec) {
+    stopMotionRecordingTimer(camera.id);
+    motionRecordTimers[camera.id] = setTimeout(() => {
+        const active = recordProcesses[camera.id];
+        if (active && active.startedByMotion) {
+            const result = stopRecording(camera.id);
+            logUserAction('motion_recording_auto_stop', camera, {
+                filename: result.filename,
+                durationSeconds: result.duration
+            });
+        }
+        delete motionRecordTimers[camera.id];
+    }, durationSec * 1000);
+}
+
+function handleMotionDetected(camera, meta = {}) {
+    const now = Date.now();
+    const cfg = getMotionConfig(camera);
+    const last = motionLastTriggerAt[camera.id] || 0;
+    if (now - last < cfg.cooldownMs) return;
+    motionLastTriggerAt[camera.id] = now;
+
+    logUserAction('motion_detected', camera, {
+        at: new Date().toISOString(),
+        ...meta
+    });
+
+    if (cfg.screenshotOnMotion) {
+        captureScreenshotInternal(camera, 'motion').catch((err) => {
+            console.error(`[MOTION] Screenshot failed for ${camera.name}: ${err.message}`);
+        });
+    }
+
+    if (cfg.autoRecordOnMotion) {
+        const active = recordProcesses[camera.id];
+        if (!active) {
+            const result = startRecording(camera, { startedByMotion: true, reason: 'motion' });
+            if (result.success) {
+                logUserAction('motion_recording_started', camera, {
+                    filename: result.filename,
+                    durationSec: cfg.recordDurationSec
+                });
+            }
+        }
+        if (recordProcesses[camera.id]?.startedByMotion) {
+            scheduleMotionAutoStop(camera, cfg.recordDurationSec);
+        }
+    }
+}
+
+function stopMotionDetection(camId) {
+    if (motionProcesses[camId]) {
+        try { motionProcesses[camId].kill('SIGTERM'); } catch (e) { }
+        delete motionProcesses[camId];
+    }
+    stopMotionRecordingTimer(camId);
+}
+
+async function startMotionDetection(camera) {
+    const runtime = cameraRuntime[camera.id];
+    if (!runtime?.motionEnabled) return;
+    if (motionProcesses[camera.id]) return;
+
+    let rtspSource = getCameraRtspUrl(camera);
+    try {
+        const resolved = await resolveCameraRtspSource(camera);
+        rtspSource = resolved.url;
+    } catch (err) {
+        console.error(`[MOTION] Resolve failed for ${camera.name}: ${err.message}`);
+    }
+
+    const cfg = getMotionConfig(camera);
+    const motionFilter = `fps=2,select='gt(scene\\,${cfg.threshold.toFixed(4)})',showinfo`;
+    const args = [
+        '-loglevel', 'info',
+        '-rtsp_transport', 'tcp',
+        '-i', rtspSource
+    ];
+    appendCameraVideoFilterArgs(camera, args, [motionFilter]);
+    args.push('-an', '-f', 'null', '-');
+
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    motionProcesses[camera.id] = proc;
+    console.log(`[MOTION] Started detector for ${camera.name}`);
+
+    proc.stderr.on('data', (data) => {
+        const text = data.toString();
+        if (text.includes('showinfo')) {
+            const pts = text.match(/pts_time:([0-9.]+)/);
+            handleMotionDetected(camera, { ptsTime: pts ? Number(pts[1]) : null });
+        }
+    });
+
+    proc.on('close', (code) => {
+        delete motionProcesses[camera.id];
+        if (cameraRuntime[camera.id]?.motionEnabled) {
+            setTimeout(() => startMotionDetection(camera), 3000);
+        }
+        if (code !== 0 && code !== null) {
+            console.warn(`[MOTION] Detector exited for ${camera.name} with code ${code}`);
+        }
+    });
+
+    proc.on('error', (err) => {
+        delete motionProcesses[camera.id];
+        console.error(`[MOTION] Failed for ${camera.name}: ${err.message}`);
+    });
+}
+
 // ============== FFmpeg Stream Management ==============
 
 function getRtspCandidates(camera) {
@@ -281,9 +465,16 @@ function getCameraRtspUrl(camera) {
     return resolvedRtspSources[camera.id]?.url || camera.rtspUrl;
 }
 
-function appendCameraVideoFilterArgs(camera, args) {
+function appendCameraVideoFilterArgs(camera, args, extraFilters = []) {
+    const filters = [];
     if (typeof camera.ffmpegVideoFilter === 'string' && camera.ffmpegVideoFilter.trim()) {
-        args.push('-vf', camera.ffmpegVideoFilter.trim());
+        filters.push(camera.ffmpegVideoFilter.trim());
+    }
+    if (Array.isArray(extraFilters) && extraFilters.length) {
+        filters.push(...extraFilters.filter(Boolean));
+    }
+    if (filters.length) {
+        args.push('-vf', filters.join(','));
     }
 }
 
@@ -466,6 +657,12 @@ async function startStream(camera) {
         fs.unlinkSync(path.join(camStreamDir, f));
     });
 
+    const quality = getQualityProfile(camera);
+    const extraFilters = [];
+    if (quality.scaleWidth) {
+        extraFilters.push(`scale=${quality.scaleWidth}:-2`);
+    }
+
     const args = [
         '-fflags', '+genpts+discardcorrupt',
         '-rtsp_transport', 'tcp',
@@ -473,15 +670,15 @@ async function startStream(camera) {
         '-i', rtspSource
     ];
 
-    appendCameraVideoFilterArgs(camera, args);
+    appendCameraVideoFilterArgs(camera, args, extraFilters);
 
     args.push(
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
-        '-crf', '23',
-        '-r', '15',
-        '-g', '30',
+        '-crf', String(quality.crf),
+        '-r', String(quality.fps),
+        '-g', String(quality.gop),
         '-an',
         '-f', 'hls',
         '-hls_time', '2',
@@ -530,7 +727,7 @@ function stopStream(camId) {
 
 // ============== Recording Management ==============
 
-function startRecording(camera) {
+function startRecording(camera, options = {}) {
     if (recordProcesses[camera.id]) {
         return { success: false, message: 'Already recording' };
     }
@@ -579,7 +776,8 @@ function startRecording(camera) {
 
     logUserAction('recording_start', camera, {
         filename,
-        path: filepath
+        path: filepath,
+        reason: options.reason || 'manual'
     });
 
     proc.on('close', (code) => {
@@ -624,7 +822,8 @@ function startRecording(camera) {
         process: proc,
         filename,
         startTime,
-        filepath
+        filepath,
+        startedByMotion: !!options.startedByMotion
     };
 
     return { success: true, filename };
@@ -647,6 +846,7 @@ function stopRecording(camId) {
 
     const duration = Math.round((new Date() - rec.startTime) / 1000);
     delete recordProcesses[camId];
+    stopMotionRecordingTimer(camId);
 
     upsertRecordingState({
         filename: rec.filename,
@@ -731,6 +931,42 @@ app.post('/api/cameras/:id/restart', (req, res) => {
         logUserAction('stream_restart', cam, { reason: 'user_request' });
         res.json({ success: true, message: `Restarting stream for ${cam.name}` });
     }, 1000);
+});
+
+app.post('/api/cameras/:id/quality', (req, res) => {
+    const cam = config.cameras.find(c => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: 'Camera not found' });
+
+    const mode = String(req.body?.mode || '').toLowerCase();
+    if (!['hd', 'sd'].includes(mode)) {
+        return res.status(400).json({ error: 'Quality mode must be hd or sd' });
+    }
+
+    cameraRuntime[cam.id].qualityMode = mode;
+    stopStream(cam.id);
+    setTimeout(() => startStream(cam), 800);
+
+    logUserAction('quality_mode_change', cam, { mode });
+    res.json({ success: true, cameraId: cam.id, mode });
+});
+
+app.post('/api/cameras/:id/motion', (req, res) => {
+    const cam = config.cameras.find(c => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: 'Camera not found' });
+
+    const enabled = !!req.body?.enabled;
+    cameraRuntime[cam.id].motionEnabled = enabled;
+
+    if (enabled) {
+        startMotionDetection(cam).catch((err) => {
+            console.error(`[MOTION] Enable failed for ${cam.name}: ${err.message}`);
+        });
+    } else {
+        stopMotionDetection(cam.id);
+    }
+
+    logUserAction('motion_toggle', cam, { enabled });
+    res.json({ success: true, cameraId: cam.id, motionEnabled: enabled });
 });
 
 app.post('/api/cameras/:id/ptz/move', async (req, res) => {
@@ -850,42 +1086,9 @@ app.delete('/api/recordings/:filename', async (req, res) => {
 app.post('/api/cameras/:id/screenshot', (req, res) => {
     const cam = config.cameras.find(c => c.id === req.params.id);
     if (!cam) return res.status(404).json({ error: 'Camera not found' });
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `screenshot_${cam.id}_${timestamp}.jpg`;
-    const filepath = path.join(recordingsDir, filename);
-
-    const rtspSource = getCameraRtspUrl(cam);
-    const args = [
-        '-fflags', '+genpts+discardcorrupt',
-        '-rtsp_transport', 'tcp',
-        '-use_wallclock_as_timestamps', '1',
-        '-i', rtspSource
-    ];
-
-    appendCameraVideoFilterArgs(cam, args);
-
-    args.push(
-        '-frames:v', '1',
-        '-q:v', '2',
-        filepath
-    );
-
-    const proc = spawn('ffmpeg', args);
-    proc.on('close', (code) => {
-        if (code === 0) {
-            logUserAction('screenshot_capture', cam, {
-                filename,
-                path: filepath
-            });
-            res.json({ success: true, filename, url: `/recordings-files/${filename}` });
-        } else {
-            res.status(500).json({ error: 'Screenshot failed' });
-        }
-    });
-    proc.on('error', (err) => {
-        res.status(500).json({ error: err.message });
-    });
+    captureScreenshotInternal(cam, 'manual')
+        .then((result) => res.json(result))
+        .catch((err) => res.status(500).json({ error: err.message }));
 });
 
 app.get('/api/actions', async (req, res) => {
@@ -947,6 +1150,11 @@ initDatabase()
             config.cameras.forEach(cam => {
                 console.log(`[INIT] Starting stream for ${cam.name} (${cam.ip})`);
                 startStream(cam);
+                if (cameraRuntime[cam.id]?.motionEnabled) {
+                    startMotionDetection(cam).catch((err) => {
+                        console.error(`[MOTION] Startup failed for ${cam.name}: ${err.message}`);
+                    });
+                }
             });
         });
     })
@@ -960,6 +1168,7 @@ process.on('SIGINT', () => {
     console.log('\n[SHUTDOWN] Stopping all streams and recordings...');
     Object.keys(streamProcesses).forEach(stopStream);
     Object.keys(recordProcesses).forEach(stopRecording);
+    Object.keys(motionProcesses).forEach(stopMotionDetection);
     Object.keys(ptzClients).forEach((camId) => { delete ptzClients[camId]; });
     db.close(() => process.exit(0));
 });
@@ -967,6 +1176,7 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
     Object.keys(streamProcesses).forEach(stopStream);
     Object.keys(recordProcesses).forEach(stopRecording);
+    Object.keys(motionProcesses).forEach(stopMotionDetection);
     Object.keys(ptzClients).forEach((camId) => { delete ptzClients[camId]; });
     db.close(() => process.exit(0));
 });

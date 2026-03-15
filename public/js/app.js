@@ -168,6 +168,14 @@ function renderCameraGrid() {
           ↻ RESTART
         </button>
       </div>
+      <div class="camera-controls camera-controls-secondary">
+        <button class="cam-btn btn-quality" id="btn-quality-${cam.id}" onclick="toggleQuality('${cam.id}')">
+          ${cam.qualityMode === 'sd' ? 'SD MODE' : 'HD MODE'}
+        </button>
+        <button class="cam-btn btn-motion ${cam.motionEnabled ? 'active' : ''}" id="btn-motion-${cam.id}" onclick="toggleMotion('${cam.id}')">
+          ${cam.motionEnabled ? 'MOTION ON' : 'MOTION OFF'}
+        </button>
+      </div>
       ${renderPtzControls(cam)}
     `;
         grid.appendChild(card);
@@ -317,6 +325,8 @@ function updateCameraStatuses() {
         const card = document.getElementById(`card-${cam.id}`);
         const recBtn = document.getElementById(`btn-rec-${cam.id}`);
         const recIndicator = document.getElementById(`rec-indicator-${cam.id}`);
+        const qualityBtn = document.getElementById(`btn-quality-${cam.id}`);
+        const motionBtn = document.getElementById(`btn-motion-${cam.id}`);
 
         if (card) {
             card.className = `camera-card ${cam.recording ? 'recording' : ''}`;
@@ -335,6 +345,15 @@ function updateCameraStatuses() {
                     timer.textContent = formatDuration(cam.recordingInfo.duration);
                 }
             }
+        }
+
+        if (qualityBtn) {
+            qualityBtn.innerHTML = cam.qualityMode === 'sd' ? 'SD MODE' : 'HD MODE';
+        }
+
+        if (motionBtn) {
+            motionBtn.className = `cam-btn btn-motion ${cam.motionEnabled ? 'active' : ''}`;
+            motionBtn.innerHTML = cam.motionEnabled ? 'MOTION ON' : 'MOTION OFF';
         }
     });
 }
@@ -408,6 +427,50 @@ async function restartStream(camId) {
         }, 4000);
     } catch (err) {
         showToast('Restart failed', 'error');
+    }
+}
+
+async function toggleQuality(camId) {
+    const cam = cameras.find(c => c.id === camId);
+    if (!cam) return;
+    const nextMode = cam.qualityMode === 'sd' ? 'hd' : 'sd';
+
+    try {
+        showToast(`Switching to ${nextMode.toUpperCase()}...`, 'info');
+        const res = await fetch(`${API_BASE}/api/cameras/${camId}/quality`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: nextMode })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || 'Quality change failed');
+        }
+        await fetchCameraStatus();
+        showToast(`Quality set to ${nextMode.toUpperCase()}`, 'success');
+    } catch (err) {
+        showToast(`Quality failed: ${err.message}`, 'error');
+    }
+}
+
+async function toggleMotion(camId) {
+    const cam = cameras.find(c => c.id === camId);
+    if (!cam) return;
+    const nextEnabled = !cam.motionEnabled;
+    try {
+        const res = await fetch(`${API_BASE}/api/cameras/${camId}/motion`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: nextEnabled })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || 'Motion toggle failed');
+        }
+        await fetchCameraStatus();
+        showToast(`Motion ${nextEnabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+        showToast(`Motion failed: ${err.message}`, 'error');
     }
 }
 
