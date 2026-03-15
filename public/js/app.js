@@ -27,6 +27,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-close-fullscreen').addEventListener('click', closeFullscreen);
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeFullscreen();
+
+        // Keyboard PTZ in fullscreen
+        const modalActive = document.getElementById('fullscreen-modal')?.classList.contains('active');
+        if (!modalActive) return;
+
+        if (e.key === 'ArrowUp') fullscreenPtzMove('up');
+        if (e.key === 'ArrowDown') fullscreenPtzMove('down');
+        if (e.key === 'ArrowLeft') fullscreenPtzMove('left');
+        if (e.key === 'ArrowRight') fullscreenPtzMove('right');
+        if (e.key === ' ') fullscreenPtzStop();
     });
 });
 
@@ -52,7 +62,7 @@ function playUiSound(type = 'click') {
 
 function attachUiClickSounds() {
     document.addEventListener('click', (event) => {
-        const interactive = event.target.closest('.cam-btn, .nav-link, .btn-close-fullscreen, .cyber-btn, .rec-action-btn');
+        const interactive = event.target.closest('.cam-btn, .ptz-btn, .nav-link, .btn-close-fullscreen, .cyber-btn, .rec-action-btn');
         if (!interactive) return;
         if (interactive.classList.contains('btn-fullscreen')) return; // handled with expand sound
         playUiSound('click');
@@ -158,6 +168,7 @@ function renderCameraGrid() {
           ↻ RESTART
         </button>
       </div>
+      ${renderPtzControls(cam)}
     `;
         grid.appendChild(card);
 
@@ -167,6 +178,23 @@ function renderCameraGrid() {
         // Start timestamp
         updateTimestamp(cam.id);
     });
+}
+
+function renderPtzControls(cam) {
+    if (!cam.ptzEnabled) return '';
+
+    return `
+      <div class="camera-ptz">
+        <div class="ptz-title">PTZ CONTROL</div>
+        <div class="ptz-grid">
+          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'up')" title="Move Up">▲</button>
+          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'left')" title="Move Left">◀</button>
+          <button class="ptz-btn ptz-stop" onclick="ptzStop('${cam.id}')" title="Stop">■</button>
+          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'right')" title="Move Right">▶</button>
+          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'down')" title="Move Down">▼</button>
+        </div>
+      </div>
+    `;
 }
 
 // ============== HLS Stream ==============
@@ -383,6 +411,36 @@ async function restartStream(camId) {
     }
 }
 
+async function ptzMove(camId, direction) {
+    try {
+        const res = await fetch(`${API_BASE}/api/cameras/${camId}/ptz/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ direction })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || 'PTZ move failed');
+        }
+        showToast(`PTZ ${direction.toUpperCase()}`, 'info');
+    } catch (err) {
+        showToast(`PTZ failed: ${err.message}`, 'error');
+    }
+}
+
+async function ptzStop(camId) {
+    try {
+        const res = await fetch(`${API_BASE}/api/cameras/${camId}/ptz/stop`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || 'PTZ stop failed');
+        }
+        showToast('PTZ STOP', 'info');
+    } catch (err) {
+        showToast(`PTZ stop failed: ${err.message}`, 'error');
+    }
+}
+
 // ============== Fullscreen ==============
 
 function openFullscreen(camId) {
@@ -400,6 +458,7 @@ function openFullscreen(camId) {
 
     title.textContent = cam.name.toUpperCase();
     activeFullscreenCamId = camId;
+    updateFullscreenPtzControls(cam);
 
     // Clone stream to fullscreen video
     const hlsUrl = `${API_BASE}/streams/${camId}/stream.m3u8`;
@@ -473,6 +532,7 @@ function closeFullscreen() {
         video.src = '';
         modal.classList.remove('active');
         activeFullscreenCamId = null;
+        updateFullscreenPtzControls(null);
     };
 
     if (!source || prefersReducedMotion) {
@@ -513,6 +573,27 @@ function closeFullscreen() {
         cleanupAndClose();
         fullscreenTransitioning = false;
     }, 430);
+}
+
+function updateFullscreenPtzControls(cam) {
+    const ptzPanel = document.getElementById('fullscreen-ptz');
+    if (!ptzPanel) return;
+
+    if (cam && cam.ptzEnabled) {
+        ptzPanel.classList.remove('hidden');
+    } else {
+        ptzPanel.classList.add('hidden');
+    }
+}
+
+function fullscreenPtzMove(direction) {
+    if (!activeFullscreenCamId) return;
+    ptzMove(activeFullscreenCamId, direction);
+}
+
+function fullscreenPtzStop() {
+    if (!activeFullscreenCamId) return;
+    ptzStop(activeFullscreenCamId);
 }
 
 // ============== Timestamp ==============

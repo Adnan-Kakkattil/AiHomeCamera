@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
+const { Cam } = require('onvif');
 
 // Load config
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
@@ -29,6 +30,7 @@ const db = new sqlite3.Database(dbPath);
 const streamProcesses = {};   // { camId: childProcess }
 const recordProcesses = {};   // { camId: { process, filename, startTime } }
 const resolvedRtspSources = {}; // { camId: { url, fingerprint, duplicate } }
+const ptzClients = {}; // { camId: onvif.Cam instance }
 
 function dbRun(sql, params = []) {
     return new Promise((resolve, reject) => {
@@ -160,6 +162,91 @@ function parseJsonSafe(value, fallback = null) {
         return JSON.parse(value);
     } catch {
         return fallback;
+    }
+}
+
+function getPtzConfig(camera) {
+    if (!camera?.ptz?.enabled) return null;
+    return camera.ptz;
+}
+
+function getCameraPublicData(camera) {
+    return {
+        id: camera.id,
+        name: camera.name,
+        ip: camera.ip,
+        port: camera.port,
+        ptzEnabled: !!getPtzConfig(camera)
+    };
+}
+
+function createOnvifClient(camera, ptzConfig) {
+    return new Promise((resolve, reject) => {
+        const hostname = ptzConfig.host || camera.ip;
+        const port = ptzConfig.port || 80;
+        const username = ptzConfig.username || camera.username;
+        const password = ptzConfig.password || camera.password;
+
+        new Cam({
+            hostname,
+            port,
+            username,
+            password
+        }, function onReady(err) {
+            if (err) return reject(err);
+            resolve(this);
+        });
+    });
+}
+
+async function getPtzClient(camera) {
+    const existing = ptzClients[camera.id];
+    if (existing) return existing;
+
+    const ptzConfig = getPtzConfig(camera);
+    if (!ptzConfig) throw new Error('PTZ not enabled for this camera');
+
+    if ((ptzConfig.protocol || 'onvif').toLowerCase() !== 'onvif') {
+        throw new Error(`Unsupported PTZ protocol: ${ptzConfig.protocol}`);
+    }
+
+    const client = await createOnvifClient(camera, ptzConfig);
+    ptzClients[camera.id] = client;
+    return client;
+}
+
+function onvifContinuousMove(client, options) {
+    return new Promise((resolve, reject) => {
+        client.continuousMove(options, (err, result) => {
+            if (err) return reject(err);
+            resolve(result);
+        });
+    });
+}
+
+function onvifStop(client, options = { panTilt: true, zoom: true }) {
+    return new Promise((resolve, reject) => {
+        client.stop(options, (err, result) => {
+            if (err) return reject(err);
+            resolve(result);
+        });
+    });
+}
+
+function getPtzVector(direction, speed) {
+    const s = Math.max(0.05, Math.min(1, Number(speed) || 0.5));
+    switch (direction) {
+        case 'up': return { x: 0, y: s, zoom: 0 };
+        case 'down': return { x: 0, y: -s, zoom: 0 };
+        case 'left': return { x: -s, y: 0, zoom: 0 };
+        case 'right': return { x: s, y: 0, zoom: 0 };
+        case 'up-left': return { x: -s, y: s, zoom: 0 };
+        case 'up-right': return { x: s, y: s, zoom: 0 };
+        case 'down-left': return { x: -s, y: -s, zoom: 0 };
+        case 'down-right': return { x: s, y: -s, zoom: 0 };
+        case 'zoom-in': return { x: 0, y: 0, zoom: s };
+        case 'zoom-out': return { x: 0, y: 0, zoom: -s };
+        default: return null;
     }
 }
 
@@ -608,10 +695,7 @@ app.use('/recordings-files', express.static(recordingsDir));
 // === Camera endpoints ===
 app.get('/api/cameras', (req, res) => {
     const cameras = config.cameras.map(c => ({
-        id: c.id,
-        name: c.name,
-        ip: c.ip,
-        port: c.port,
+        ...getCameraPublicData(c),
         activeRtspUrl: maskRtspCredentials(getCameraRtspUrl(c)),
         rtspResolved: !!resolvedRtspSources[c.id],
         rtspDuplicateFallback: !!resolvedRtspSources[c.id]?.duplicate,
@@ -631,8 +715,7 @@ app.get('/api/cameras/:id/status', (req, res) => {
     if (!cam) return res.status(404).json({ error: 'Camera not found' });
 
     res.json({
-        id: cam.id,
-        name: cam.name,
+        ...getCameraPublicData(cam),
         streaming: !!streamProcesses[cam.id],
         recording: !!recordProcesses[cam.id]
     });
@@ -648,6 +731,55 @@ app.post('/api/cameras/:id/restart', (req, res) => {
         logUserAction('stream_restart', cam, { reason: 'user_request' });
         res.json({ success: true, message: `Restarting stream for ${cam.name}` });
     }, 1000);
+});
+
+app.post('/api/cameras/:id/ptz/move', async (req, res) => {
+    const cam = config.cameras.find(c => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: 'Camera not found' });
+
+    const ptzConfig = getPtzConfig(cam);
+    if (!ptzConfig) return res.status(400).json({ error: 'PTZ not enabled for this camera' });
+
+    const direction = String(req.body?.direction || '').toLowerCase();
+    const speed = req.body?.speed ?? ptzConfig.defaultSpeed ?? 0.5;
+    const durationMsRaw = req.body?.durationMs ?? ptzConfig.defaultDurationMs ?? 500;
+    const durationMs = Math.max(100, Math.min(3000, Number(durationMsRaw) || 500));
+    const vector = getPtzVector(direction, speed);
+
+    if (!vector) {
+        return res.status(400).json({ error: 'Invalid PTZ direction' });
+    }
+
+    try {
+        const client = await getPtzClient(cam);
+        await onvifContinuousMove(client, { ...vector, timeout: durationMs / 1000 });
+
+        logUserAction('ptz_move', cam, { direction, speed: Number(speed), durationMs });
+        res.json({ success: true, direction, speed: Number(speed), durationMs });
+    } catch (err) {
+        console.error(`[PTZ] Move failed for ${cam.name}: ${err.message}`);
+        delete ptzClients[cam.id];
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/cameras/:id/ptz/stop', async (req, res) => {
+    const cam = config.cameras.find(c => c.id === req.params.id);
+    if (!cam) return res.status(404).json({ error: 'Camera not found' });
+
+    const ptzConfig = getPtzConfig(cam);
+    if (!ptzConfig) return res.status(400).json({ error: 'PTZ not enabled for this camera' });
+
+    try {
+        const client = await getPtzClient(cam);
+        await onvifStop(client, { panTilt: true, zoom: true });
+        logUserAction('ptz_stop', cam, {});
+        res.json({ success: true });
+    } catch (err) {
+        console.error(`[PTZ] Stop failed for ${cam.name}: ${err.message}`);
+        delete ptzClients[cam.id];
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // === Recording endpoints ===
@@ -828,11 +960,13 @@ process.on('SIGINT', () => {
     console.log('\n[SHUTDOWN] Stopping all streams and recordings...');
     Object.keys(streamProcesses).forEach(stopStream);
     Object.keys(recordProcesses).forEach(stopRecording);
+    Object.keys(ptzClients).forEach((camId) => { delete ptzClients[camId]; });
     db.close(() => process.exit(0));
 });
 
 process.on('SIGTERM', () => {
     Object.keys(streamProcesses).forEach(stopStream);
     Object.keys(recordProcesses).forEach(stopRecording);
+    Object.keys(ptzClients).forEach((camId) => { delete ptzClients[camId]; });
     db.close(() => process.exit(0));
 });

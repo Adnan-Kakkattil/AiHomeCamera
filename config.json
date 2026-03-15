@@ -18,6 +18,16 @@
       "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_0",
       "ffmpegVideoFilter": "crop=in_w:in_h/2:0:in_h/2",
       "disableRtspProbe": true,
+      "ptz": {
+        "enabled": true,
+        "protocol": "onvif",
+        "host": "192.168.31.135",
+        "port": 8899,
+        "username": "admin",
+        "password": "Adnan@66202",
+        "defaultSpeed": 0.5,
+        "defaultDurationMs": 500
+      },
       "username": "admin",
       "password": "Adnan@66202",
       "port": 554
@@ -40,6 +50,16 @@
       "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_0",
       "ffmpegVideoFilter": "crop=in_w:in_h/2:0:in_h/2",
       "disableRtspProbe": true,
+      "ptz": {
+        "enabled": true,
+        "protocol": "onvif",
+        "host": "192.168.31.94",
+        "port": 8899,
+        "username": "admin",
+        "password": "Adnan@66202",
+        "defaultSpeed": 0.5,
+        "defaultDurationMs": 500
+      },
       "username": "admin",
       "password": "Adnan@66202",
       "port": 554

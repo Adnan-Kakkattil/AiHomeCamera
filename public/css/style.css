@@ -592,6 +592,63 @@ body::before {
   background: rgba(255, 102, 34, 0.1);
 }
 
+/* PTZ controls */
+.camera-ptz {
+  padding: 10px 16px 14px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-color);
+}
+
+.ptz-title {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 2px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.ptz-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas:
+    ". up ."
+    "left stop right"
+    ". down .";
+  gap: 6px;
+}
+
+.ptz-grid .ptz-btn:nth-child(1) { grid-area: up; }
+.ptz-grid .ptz-btn:nth-child(2) { grid-area: left; }
+.ptz-grid .ptz-btn:nth-child(3) { grid-area: stop; }
+.ptz-grid .ptz-btn:nth-child(4) { grid-area: right; }
+.ptz-grid .ptz-btn:nth-child(5) { grid-area: down; }
+
+.ptz-btn {
+  height: 32px;
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.ptz-btn:hover {
+  color: var(--neon-cyan);
+  border-color: var(--border-active);
+  background: var(--neon-cyan-dim);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.14);
+}
+
+.ptz-btn.ptz-stop:hover {
+  color: var(--neon-red);
+  border-color: rgba(255, 51, 85, 0.4);
+  background: var(--neon-red-dim);
+  box-shadow: 0 0 12px rgba(255, 51, 85, 0.14);
+}
+
 /* === Fullscreen Modal === */
 .fullscreen-modal {
   display: flex;
@@ -679,6 +736,24 @@ body::before {
   flex: 1;
   overflow: hidden;
   transform-origin: center center;
+}
+
+.fullscreen-ptz {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: 170px;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+  background: rgba(8, 10, 22, 0.82);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 24px rgba(0, 240, 255, 0.12);
+  z-index: 4;
+}
+
+.fullscreen-ptz.hidden {
+  display: none;
 }
 
 .fullscreen-video-shell.video-shell-animating {
