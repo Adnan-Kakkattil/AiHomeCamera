@@ -43,6 +43,25 @@
       "username": "admin",
       "password": "Adnan@66202",
       "port": 554
+    },
+    {
+      "id": "cam5",
+      "name": "Camera 3 - Hikvision",
+      "ip": "103.78.221.146",
+      "rtspUrl": "rtsp://103.78.221.146:554/Streaming/Channels/101",
+      "rtspCandidates": [
+        "rtsp://103.78.221.146:554/Streaming/Channels/101",
+        "rtsp://103.78.221.146:555/Streaming/Channels/101",
+        "rtsp://103.78.221.146:554/Streaming/Channels/102",
+        "rtsp://103.78.221.146:555/Streaming/Channels/102",
+        "rtsp://103.78.221.146:554/h264/ch1/main/av_stream",
+        "rtsp://103.78.221.146:554/h264/ch1/sub/av_stream",
+        "rtsp://103.78.221.146:555/h264/ch1/main/av_stream",
+        "rtsp://103.78.221.146:555/h264/ch1/sub/av_stream"
+      ],
+      "username": "admin",
+      "password": "G12345678",
+      "port": 554
     }
   ],
   "serverPort": 3000,
