@@ -1,0 +1,13 @@
+services:
+  ai-home-camera:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-home-camera
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./recordings:/app/recordings
+      - ./streams:/app/streams

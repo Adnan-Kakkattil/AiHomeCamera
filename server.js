@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const sqlite3 = require('sqlite3').verbose();
 
 // Load config
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
@@ -15,14 +16,152 @@ app.use(express.json());
 // Ensure directories exist
 const streamsDir = path.resolve(config.streamsDir);
 const recordingsDir = path.resolve(config.recordingsDir);
-[streamsDir, recordingsDir].forEach(dir => {
+const dataDir = path.resolve(path.join(__dirname, 'data'));
+[streamsDir, recordingsDir, dataDir].forEach(dir => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
+
+// SQLite database (persistent local metadata + user actions)
+const dbPath = path.join(dataDir, 'camera_events.sqlite');
+const db = new sqlite3.Database(dbPath);
 
 // Track active FFmpeg processes
 const streamProcesses = {};   // { camId: childProcess }
 const recordProcesses = {};   // { camId: { process, filename, startTime } }
 const resolvedRtspSources = {}; // { camId: { url, fingerprint, duplicate } }
+
+function dbRun(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function onRun(err) {
+            if (err) return reject(err);
+            resolve({ lastID: this.lastID, changes: this.changes });
+        });
+    });
+}
+
+function dbAll(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) return reject(err);
+            resolve(rows);
+        });
+    });
+}
+
+async function initDatabase() {
+    await dbRun(`
+        CREATE TABLE IF NOT EXISTS recordings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            camera_id TEXT NOT NULL,
+            camera_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            url TEXT NOT NULL,
+            status TEXT NOT NULL,
+            start_time TEXT,
+            end_time TEXT,
+            duration_seconds INTEGER,
+            size_bytes INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            deleted_at TEXT
+        )
+    `);
+
+    await dbRun(`
+        CREATE TABLE IF NOT EXISTS action_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_type TEXT NOT NULL,
+            camera_id TEXT,
+            camera_name TEXT,
+            details_json TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    `);
+
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_recordings_camera_id ON recordings(camera_id)`);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_recordings_deleted_at ON recordings(deleted_at)`);
+    await dbRun(`CREATE INDEX IF NOT EXISTS idx_action_logs_created_at ON action_logs(created_at)`);
+}
+
+function logUserAction(actionType, camera, details = {}) {
+    const cameraId = camera?.id || null;
+    const cameraName = camera?.name || null;
+    return dbRun(
+        `INSERT INTO action_logs (action_type, camera_id, camera_name, details_json)
+         VALUES (?, ?, ?, ?)`,
+        [actionType, cameraId, cameraName, JSON.stringify(details)]
+    ).catch((err) => {
+        console.error(`[DB] Failed to store action log (${actionType}): ${err.message}`);
+    });
+}
+
+function upsertRecordingState(payload) {
+    return dbRun(
+        `INSERT INTO recordings (
+            filename, camera_id, camera_name, file_path, url, status, start_time, end_time,
+            duration_seconds, size_bytes, updated_at, deleted_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), NULL)
+         ON CONFLICT(filename) DO UPDATE SET
+            camera_id = excluded.camera_id,
+            camera_name = excluded.camera_name,
+            file_path = excluded.file_path,
+            url = excluded.url,
+            status = excluded.status,
+            start_time = COALESCE(excluded.start_time, recordings.start_time),
+            end_time = COALESCE(excluded.end_time, recordings.end_time),
+            duration_seconds = COALESCE(excluded.duration_seconds, recordings.duration_seconds),
+            size_bytes = COALESCE(excluded.size_bytes, recordings.size_bytes),
+            updated_at = datetime('now'),
+            deleted_at = excluded.deleted_at`,
+        [
+            payload.filename,
+            payload.cameraId,
+            payload.cameraName,
+            payload.filePath,
+            payload.url,
+            payload.status || 'saved',
+            payload.startTime || null,
+            payload.endTime || null,
+            Number.isInteger(payload.durationSeconds) ? payload.durationSeconds : null,
+            Number.isInteger(payload.sizeBytes) ? payload.sizeBytes : 0,
+        ]
+    );
+}
+
+async function syncRecordingsFromDisk() {
+    try {
+        const files = fs.readdirSync(recordingsDir).filter(f => f.endsWith('.mp4'));
+        for (const filename of files) {
+            const filePath = path.join(recordingsDir, filename);
+            const stat = fs.statSync(filePath);
+            const camId = filename.replace('.mp4', '').split('_')[0];
+            const cam = config.cameras.find(c => c.id === camId);
+
+            await upsertRecordingState({
+                filename,
+                cameraId: camId,
+                cameraName: cam ? cam.name : camId,
+                filePath,
+                url: `/recordings-files/${filename}`,
+                status: 'saved',
+                startTime: stat.birthtime ? stat.birthtime.toISOString() : null,
+                endTime: stat.mtime ? stat.mtime.toISOString() : null,
+                sizeBytes: stat.size
+            });
+        }
+    } catch (err) {
+        console.error(`[DB] Failed syncing recordings from disk: ${err.message}`);
+    }
+}
+
+function parseJsonSafe(value, fallback = null) {
+    try {
+        return JSON.parse(value);
+    } catch {
+        return fallback;
+    }
+}
 
 // ============== FFmpeg Stream Management ==============
 
@@ -312,6 +451,7 @@ function startRecording(camera) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${camera.id}_${timestamp}.mp4`;
     const filepath = path.join(recordingsDir, filename);
+    const startTime = new Date();
 
     const rtspSource = getCameraRtspUrl(camera);
     const args = [
@@ -337,9 +477,55 @@ function startRecording(camera) {
 
     const proc = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
+    upsertRecordingState({
+        filename,
+        cameraId: camera.id,
+        cameraName: camera.name,
+        filePath: filepath,
+        url: `/recordings-files/${filename}`,
+        status: 'recording',
+        startTime: startTime.toISOString(),
+        sizeBytes: 0
+    }).catch((err) => {
+        console.error(`[DB] Failed to store recording start for ${filename}: ${err.message}`);
+    });
+
+    logUserAction('recording_start', camera, {
+        filename,
+        path: filepath
+    });
+
     proc.on('close', (code) => {
         console.log(`[RECORD] ${camera.name} recording ended: ${filename} (code ${code})`);
         delete recordProcesses[camera.id];
+
+        const endTime = new Date();
+        const duration = Math.max(0, Math.round((endTime - startTime) / 1000));
+        const sizeBytes = fs.existsSync(filepath) ? fs.statSync(filepath).size : 0;
+        const status = code === 0 ? 'saved' : 'failed';
+
+        upsertRecordingState({
+            filename,
+            cameraId: camera.id,
+            cameraName: camera.name,
+            filePath: filepath,
+            url: `/recordings-files/${filename}`,
+            status,
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            durationSeconds: duration,
+            sizeBytes
+        }).catch((err) => {
+            console.error(`[DB] Failed to finalize recording ${filename}: ${err.message}`);
+        });
+
+        logUserAction('recording_process_exit', camera, {
+            filename,
+            exitCode: code,
+            status,
+            durationSeconds: duration,
+            path: filepath
+        });
     });
 
     proc.on('error', (err) => {
@@ -350,7 +536,8 @@ function startRecording(camera) {
     recordProcesses[camera.id] = {
         process: proc,
         filename,
-        startTime: new Date()
+        startTime,
+        filepath
     };
 
     return { success: true, filename };
@@ -362,6 +549,7 @@ function stopRecording(camId) {
     }
 
     const rec = recordProcesses[camId];
+    const camera = config.cameras.find(c => c.id === camId);
 
     // Send 'q' to gracefully stop FFmpeg
     try {
@@ -372,6 +560,26 @@ function stopRecording(camId) {
 
     const duration = Math.round((new Date() - rec.startTime) / 1000);
     delete recordProcesses[camId];
+
+    upsertRecordingState({
+        filename: rec.filename,
+        cameraId: camId,
+        cameraName: camera ? camera.name : camId,
+        filePath: rec.filepath,
+        url: `/recordings-files/${rec.filename}`,
+        status: 'stopping',
+        startTime: rec.startTime.toISOString(),
+        durationSeconds: duration,
+        sizeBytes: fs.existsSync(rec.filepath) ? fs.statSync(rec.filepath).size : 0
+    }).catch((err) => {
+        console.error(`[DB] Failed to mark recording stopping (${rec.filename}): ${err.message}`);
+    });
+
+    logUserAction('recording_stop', camera, {
+        filename: rec.filename,
+        durationSeconds: duration,
+        path: rec.filepath
+    });
 
     return { success: true, filename: rec.filename, duration };
 }
@@ -437,6 +645,7 @@ app.post('/api/cameras/:id/restart', (req, res) => {
     stopStream(cam.id);
     setTimeout(() => {
         startStream(cam);
+        logUserAction('stream_restart', cam, { reason: 'user_request' });
         res.json({ success: true, message: `Restarting stream for ${cam.name}` });
     }, 1000);
 });
@@ -455,27 +664,27 @@ app.post('/api/recording/stop/:cameraId', (req, res) => {
     res.json(result);
 });
 
-app.get('/api/recordings', (req, res) => {
+app.get('/api/recordings', async (req, res) => {
     try {
-        const files = fs.readdirSync(recordingsDir)
-            .filter(f => f.endsWith('.mp4'))
-            .map(f => {
-                const stat = fs.statSync(path.join(recordingsDir, f));
-                const parts = f.replace('.mp4', '').split('_');
-                const camId = parts[0];
-                const cam = config.cameras.find(c => c.id === camId);
-                return {
-                    filename: f,
-                    cameraId: camId,
-                    cameraName: cam ? cam.name : camId,
-                    size: stat.size,
-                    sizeFormatted: formatBytes(stat.size),
-                    created: stat.birthtime,
-                    modified: stat.mtime,
-                    url: `/recordings-files/${f}`
-                };
-            })
-            .sort((a, b) => new Date(b.created) - new Date(a.created));
+        const rows = await dbAll(
+            `SELECT
+                filename, camera_id, camera_name, size_bytes, start_time, end_time, updated_at, url, status
+             FROM recordings
+             WHERE deleted_at IS NULL
+             ORDER BY COALESCE(end_time, start_time, updated_at) DESC`
+        );
+
+        const files = rows.map((row) => ({
+            filename: row.filename,
+            cameraId: row.camera_id,
+            cameraName: row.camera_name,
+            size: row.size_bytes || 0,
+            sizeFormatted: formatBytes(row.size_bytes || 0),
+            created: row.start_time || row.updated_at,
+            modified: row.end_time || row.updated_at,
+            status: row.status,
+            url: row.url || `/recordings-files/${row.filename}`
+        }));
 
         res.json(files);
     } catch (err) {
@@ -483,12 +692,22 @@ app.get('/api/recordings', (req, res) => {
     }
 });
 
-app.delete('/api/recordings/:filename', (req, res) => {
+app.delete('/api/recordings/:filename', async (req, res) => {
     const filepath = path.join(recordingsDir, req.params.filename);
     if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File not found' });
 
     try {
         fs.unlinkSync(filepath);
+        await dbRun(
+            `UPDATE recordings
+             SET status = 'deleted', deleted_at = datetime('now'), updated_at = datetime('now')
+             WHERE filename = ?`,
+            [req.params.filename]
+        );
+        logUserAction('recording_delete', null, {
+            filename: req.params.filename,
+            path: filepath
+        });
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -523,6 +742,10 @@ app.post('/api/cameras/:id/screenshot', (req, res) => {
     const proc = spawn('ffmpeg', args);
     proc.on('close', (code) => {
         if (code === 0) {
+            logUserAction('screenshot_capture', cam, {
+                filename,
+                path: filepath
+            });
             res.json({ success: true, filename, url: `/recordings-files/${filename}` });
         } else {
             res.status(500).json({ error: 'Screenshot failed' });
@@ -531,6 +754,34 @@ app.post('/api/cameras/:id/screenshot', (req, res) => {
     proc.on('error', (err) => {
         res.status(500).json({ error: err.message });
     });
+});
+
+app.get('/api/actions', async (req, res) => {
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(parsedLimit)
+        ? Math.min(Math.max(parsedLimit, 1), 500)
+        : 100;
+
+    try {
+        const rows = await dbAll(
+            `SELECT id, action_type, camera_id, camera_name, details_json, created_at
+             FROM action_logs
+             ORDER BY id DESC
+             LIMIT ?`,
+            [limit]
+        );
+
+        res.json(rows.map((row) => ({
+            id: row.id,
+            actionType: row.action_type,
+            cameraId: row.camera_id,
+            cameraName: row.camera_name,
+            details: parseJsonSafe(row.details_json, {}),
+            createdAt: row.created_at
+        })));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ============== Utility ==============
@@ -545,33 +796,43 @@ function formatBytes(bytes) {
 
 // ============== Start Server ==============
 
-app.listen(config.serverPort, () => {
-    console.log('');
-    console.log('╔══════════════════════════════════════════════╗');
-    console.log('║       AI HOME CAMERA - MONITORING SYSTEM     ║');
-    console.log('╠══════════════════════════════════════════════╣');
-    console.log(`║  Server running on http://localhost:${config.serverPort}     ║`);
-    console.log(`║  Cameras configured: ${config.cameras.length}                      ║`);
-    console.log('╚══════════════════════════════════════════════╝');
-    console.log('');
+initDatabase()
+    .then(() => syncRecordingsFromDisk())
+    .then(() => {
+        console.log(`[DB] SQLite ready at ${dbPath}`);
 
-    // Auto-start all camera streams
-    config.cameras.forEach(cam => {
-        console.log(`[INIT] Starting stream for ${cam.name} (${cam.ip})`);
-        startStream(cam);
+        app.listen(config.serverPort, () => {
+            console.log('');
+            console.log('╔══════════════════════════════════════════════╗');
+            console.log('║       AI HOME CAMERA - MONITORING SYSTEM     ║');
+            console.log('╠══════════════════════════════════════════════╣');
+            console.log(`║  Server running on http://localhost:${config.serverPort}     ║`);
+            console.log(`║  Cameras configured: ${config.cameras.length}                      ║`);
+            console.log('╚══════════════════════════════════════════════╝');
+            console.log('');
+
+            // Auto-start all camera streams
+            config.cameras.forEach(cam => {
+                console.log(`[INIT] Starting stream for ${cam.name} (${cam.ip})`);
+                startStream(cam);
+            });
+        });
+    })
+    .catch((err) => {
+        console.error(`[DB] Failed to initialize SQLite: ${err.message}`);
+        process.exit(1);
     });
-});
 
 // Graceful shutdown
 process.on('SIGINT', () => {
     console.log('\n[SHUTDOWN] Stopping all streams and recordings...');
     Object.keys(streamProcesses).forEach(stopStream);
     Object.keys(recordProcesses).forEach(stopRecording);
-    process.exit(0);
+    db.close(() => process.exit(0));
 });
 
 process.on('SIGTERM', () => {
     Object.keys(streamProcesses).forEach(stopStream);
     Object.keys(recordProcesses).forEach(stopRecording);
-    process.exit(0);
+    db.close(() => process.exit(0));
 });
