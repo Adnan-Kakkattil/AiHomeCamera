@@ -6,6 +6,7 @@ const API_BASE = window.location.origin;
 let cameras = [];
 let hlsInstances = {};
 let pollInterval = null;
+let motionEventsInterval = null;
 let activeFullscreenCamId = null;
 let fullscreenTransitioning = false;
 const uiSounds = {
@@ -22,6 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchCameras();
     pollInterval = setInterval(fetchCameraStatus, 5000);
     fetchRecordingsCount();
+    fetchMotionEvents();
+    motionEventsInterval = setInterval(fetchMotionEvents, 7000);
 
     // Fullscreen modal close
     document.getElementById('btn-close-fullscreen').addEventListener('click', closeFullscreen);
@@ -88,6 +91,7 @@ async function fetchCameras() {
         const res = await fetch(`${API_BASE}/api/cameras`);
         cameras = await res.json();
         renderCameraGrid();
+        fetchMotionEvents();
         updateStats();
     } catch (err) {
         console.error('Failed to fetch cameras:', err);
@@ -115,6 +119,41 @@ async function fetchRecordingsCount() {
     } catch (err) {
         // ignore
     }
+}
+
+async function fetchMotionEvents() {
+    const list = document.getElementById('motion-events-list');
+    if (!list) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/actions?limit=50`);
+        const actions = await res.json();
+        const motionEvents = actions
+            .filter(a => a.actionType === 'motion_detected')
+            .slice(0, 8);
+
+        if (motionEvents.length === 0) {
+            list.innerHTML = '<div class="events-empty">No motion events yet.</div>';
+            return;
+        }
+
+        list.innerHTML = '';
+        motionEvents.forEach((event) => {
+            const row = document.createElement('div');
+            row.className = 'events-item';
+            row.innerHTML = `
+              <div class="events-item-camera">⚠ ${event.cameraName || event.cameraId || 'Unknown Camera'}</div>
+              <div class="events-item-time">${formatEventTime(event.createdAt)}</div>
+            `;
+            list.appendChild(row);
+        });
+    } catch (err) {
+        list.innerHTML = '<div class="events-empty">Failed to load motion events.</div>';
+    }
+}
+
+function refreshMotionEvents() {
+    fetchMotionEvents();
 }
 
 // ============== Render Camera Grid ==============
@@ -186,6 +225,27 @@ function renderCameraGrid() {
         // Start timestamp
         updateTimestamp(cam.id);
     });
+
+    renderMotionAlertCard();
+}
+
+function renderMotionAlertCard() {
+    const grid = document.getElementById('camera-grid');
+    if (!grid) return;
+
+    const card = document.createElement('div');
+    card.className = 'motion-alert-card';
+    card.id = 'motion-alert-card';
+    card.innerHTML = `
+      <div class="motion-alert-header">
+        <span class="motion-alert-title">MOTION ALERTS</span>
+        <button class="cam-btn btn-events-refresh" onclick="refreshMotionEvents()">↻ REFRESH</button>
+      </div>
+      <div class="motion-alert-body" id="motion-events-list">
+        <div class="events-empty">No motion events yet.</div>
+      </div>
+    `;
+    grid.appendChild(card);
 }
 
 function renderPtzControls(cam) {
@@ -683,6 +743,19 @@ function formatDuration(seconds) {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = (seconds % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
+}
+
+function formatEventTime(isoText) {
+    const date = new Date(isoText);
+    if (Number.isNaN(date.getTime())) return '--';
+    return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
 }
 
 function showToast(message, type = 'info') {
