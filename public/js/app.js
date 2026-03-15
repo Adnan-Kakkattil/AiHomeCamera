@@ -8,10 +8,16 @@ let hlsInstances = {};
 let pollInterval = null;
 let activeFullscreenCamId = null;
 let fullscreenTransitioning = false;
+const uiSounds = {
+    click: null,
+    expand: null
+};
 
 // ============== Init ==============
 
 document.addEventListener('DOMContentLoaded', () => {
+    initUiSounds();
+    attachUiClickSounds();
     startClock();
     fetchCameras();
     pollInterval = setInterval(fetchCameraStatus, 5000);
@@ -23,6 +29,35 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Escape') closeFullscreen();
     });
 });
+
+function initUiSounds() {
+    uiSounds.click = new Audio('sounds/ui-click.wav');
+    uiSounds.expand = new Audio('sounds/ui-expand.wav');
+
+    Object.values(uiSounds).forEach((audio) => {
+        audio.preload = 'auto';
+        audio.volume = 0.35;
+    });
+}
+
+function playUiSound(type = 'click') {
+    const source = uiSounds[type] || uiSounds.click;
+    if (!source) return;
+
+    // Clone enables rapid repeated clicks without clipping.
+    const shot = source.cloneNode();
+    shot.volume = source.volume;
+    shot.play().catch(() => { });
+}
+
+function attachUiClickSounds() {
+    document.addEventListener('click', (event) => {
+        const interactive = event.target.closest('.cam-btn, .nav-link, .btn-close-fullscreen, .cyber-btn, .rec-action-btn');
+        if (!interactive) return;
+        if (interactive.classList.contains('btn-fullscreen')) return; // handled with expand sound
+        playUiSound('click');
+    });
+}
 
 // ============== Clock ==============
 
@@ -355,6 +390,7 @@ function openFullscreen(camId) {
 
     const cam = cameras.find(c => c.id === camId);
     if (!cam) return;
+    playUiSound('expand');
 
     const modal = document.getElementById('fullscreen-modal');
     const shell = document.getElementById('fullscreen-video-shell');

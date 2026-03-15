@@ -5,10 +5,16 @@
 const API_BASE = window.location.origin;
 let allRecordings = [];
 let deleteTarget = null;
+const uiSounds = {
+    click: null,
+    expand: null
+};
 
 // ============== Init ==============
 
 document.addEventListener('DOMContentLoaded', () => {
+    initUiSounds();
+    attachUiClickSounds();
     startClock();
     fetchRecordings();
 
@@ -34,6 +40,37 @@ document.addEventListener('DOMContentLoaded', () => {
     // Populate camera filter
     populateCameraFilter();
 });
+
+function initUiSounds() {
+    uiSounds.click = new Audio('sounds/ui-click.wav');
+    uiSounds.expand = new Audio('sounds/ui-expand.wav');
+
+    Object.values(uiSounds).forEach((audio) => {
+        audio.preload = 'auto';
+        audio.volume = 0.35;
+    });
+}
+
+function playUiSound(type = 'click') {
+    const source = uiSounds[type] || uiSounds.click;
+    if (!source) return;
+
+    const shot = source.cloneNode();
+    shot.volume = source.volume;
+    shot.play().catch(() => { });
+}
+
+function attachUiClickSounds() {
+    document.addEventListener('click', (event) => {
+        const interactive = event.target.closest('.cyber-btn, .rec-action-btn, .nav-link, .btn-close-playback, .btn-cancel, .btn-danger, .recording-item');
+        if (!interactive) return;
+        if (interactive.classList.contains('recording-item')) {
+            playUiSound('expand');
+            return;
+        }
+        playUiSound('click');
+    });
+}
 
 // ============== Clock ==============
 
