@@ -594,28 +594,58 @@ body::before {
 
 /* === Fullscreen Modal === */
 .fullscreen-modal {
-  display: none;
+  display: flex;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 10000;
-  background: #000;
+  background: rgba(0, 0, 0, 0.82);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
   flex-direction: column;
+  transition: opacity 0.32s ease, visibility 0.32s ease;
+}
+
+.fullscreen-modal::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 20%, rgba(0, 240, 255, 0.12), transparent 45%);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
 }
 
 .fullscreen-modal.active {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.fullscreen-modal.active::before {
+  opacity: 1;
 }
 
 .fullscreen-header {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 24px;
   background: var(--bg-glass);
   border-bottom: 1px solid var(--border-color);
+  transform: translateY(-12px);
+  opacity: 0;
+  transition: transform 0.35s ease, opacity 0.35s ease;
+}
+
+.fullscreen-modal.active .fullscreen-header {
+  transform: translateY(0);
+  opacity: 1;
 }
 
 .fullscreen-title {
@@ -643,11 +673,34 @@ body::before {
   border-color: rgba(255, 51, 85, 0.4);
 }
 
-.fullscreen-modal video {
+.fullscreen-video-shell {
+  position: relative;
+  z-index: 2;
   flex: 1;
+  overflow: hidden;
+  transform-origin: center center;
+}
+
+.fullscreen-video-shell.video-shell-animating {
+  will-change: transform, border-radius, box-shadow;
+}
+
+.fullscreen-modal video {
+  display: block;
   width: 100%;
+  height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fullscreen-modal,
+  .fullscreen-modal::before,
+  .fullscreen-header,
+  .fullscreen-video-shell {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 /* === Recordings Page === */

@@ -6,6 +6,8 @@ const API_BASE = window.location.origin;
 let cameras = [];
 let hlsInstances = {};
 let pollInterval = null;
+let activeFullscreenCamId = null;
+let fullscreenTransitioning = false;
 
 // ============== Init ==============
 
@@ -349,14 +351,19 @@ async function restartStream(camId) {
 // ============== Fullscreen ==============
 
 function openFullscreen(camId) {
+    if (fullscreenTransitioning) return;
+
     const cam = cameras.find(c => c.id === camId);
     if (!cam) return;
 
     const modal = document.getElementById('fullscreen-modal');
+    const shell = document.getElementById('fullscreen-video-shell');
     const video = document.getElementById('fullscreen-video');
     const title = document.getElementById('fullscreen-title');
+    const source = document.getElementById(`video-container-${camId}`);
 
     title.textContent = cam.name.toUpperCase();
+    activeFullscreenCamId = camId;
 
     // Clone stream to fullscreen video
     const hlsUrl = `${API_BASE}/streams/${camId}/stream.m3u8`;
@@ -371,18 +378,105 @@ function openFullscreen(camId) {
     }
 
     modal.classList.add('active');
+
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!source || prefersReducedMotion) return;
+
+    fullscreenTransitioning = true;
+    shell.classList.add('video-shell-animating');
+
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = shell.getBoundingClientRect();
+
+    const sourceCenterX = sourceRect.left + sourceRect.width / 2;
+    const sourceCenterY = sourceRect.top + sourceRect.height / 2;
+    const targetCenterX = targetRect.left + targetRect.width / 2;
+    const targetCenterY = targetRect.top + targetRect.height / 2;
+
+    const translateX = sourceCenterX - targetCenterX;
+    const translateY = sourceCenterY - targetCenterY;
+    const scaleX = sourceRect.width / targetRect.width;
+    const scaleY = sourceRect.height / targetRect.height;
+
+    shell.style.transition = 'none';
+    shell.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`;
+    shell.style.borderRadius = '6px';
+    shell.style.boxShadow = '0 0 25px rgba(0, 240, 255, 0.25)';
+
+    requestAnimationFrame(() => {
+        shell.style.transition = 'transform 520ms cubic-bezier(0.2, 0.85, 0.2, 1), border-radius 520ms cubic-bezier(0.2, 0.85, 0.2, 1), box-shadow 520ms ease';
+        shell.style.transform = 'translate(0px, 0px) scale(1, 1)';
+        shell.style.borderRadius = '0px';
+        shell.style.boxShadow = '0 0 80px rgba(0, 240, 255, 0.12)';
+    });
+
+    setTimeout(() => {
+        shell.classList.remove('video-shell-animating');
+        shell.style.transition = '';
+        shell.style.transform = '';
+        shell.style.borderRadius = '';
+        shell.style.boxShadow = '';
+        fullscreenTransitioning = false;
+    }, 560);
 }
 
 function closeFullscreen() {
-    const modal = document.getElementById('fullscreen-modal');
-    const video = document.getElementById('fullscreen-video');
+    if (fullscreenTransitioning) return;
 
-    if (video._hls) {
-        video._hls.destroy();
-        video._hls = null;
+    const modal = document.getElementById('fullscreen-modal');
+    const shell = document.getElementById('fullscreen-video-shell');
+    const video = document.getElementById('fullscreen-video');
+    const source = activeFullscreenCamId ? document.getElementById(`video-container-${activeFullscreenCamId}`) : null;
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const cleanupAndClose = () => {
+        if (video._hls) {
+            video._hls.destroy();
+            video._hls = null;
+        }
+        video.src = '';
+        modal.classList.remove('active');
+        activeFullscreenCamId = null;
+    };
+
+    if (!source || prefersReducedMotion) {
+        cleanupAndClose();
+        return;
     }
-    video.src = '';
-    modal.classList.remove('active');
+
+    fullscreenTransitioning = true;
+    shell.classList.add('video-shell-animating');
+
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = shell.getBoundingClientRect();
+
+    const sourceCenterX = sourceRect.left + sourceRect.width / 2;
+    const sourceCenterY = sourceRect.top + sourceRect.height / 2;
+    const targetCenterX = targetRect.left + targetRect.width / 2;
+    const targetCenterY = targetRect.top + targetRect.height / 2;
+
+    const translateX = sourceCenterX - targetCenterX;
+    const translateY = sourceCenterY - targetCenterY;
+    const scaleX = sourceRect.width / targetRect.width;
+    const scaleY = sourceRect.height / targetRect.height;
+
+    shell.style.transition = 'transform 420ms cubic-bezier(0.4, 0, 0.2, 1), border-radius 420ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 420ms ease';
+    shell.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`;
+    shell.style.borderRadius = '6px';
+    shell.style.boxShadow = '0 0 25px rgba(0, 240, 255, 0.25)';
+
+    modal.style.opacity = '0';
+
+    setTimeout(() => {
+        modal.style.opacity = '';
+        shell.classList.remove('video-shell-animating');
+        shell.style.transition = '';
+        shell.style.transform = '';
+        shell.style.borderRadius = '';
+        shell.style.boxShadow = '';
+        cleanupAndClose();
+        fullscreenTransitioning = false;
+    }, 430);
 }
 
 // ============== Timestamp ==============
