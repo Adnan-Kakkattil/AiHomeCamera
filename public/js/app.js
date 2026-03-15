@@ -19,6 +19,7 @@ const uiSounds = {
 document.addEventListener('DOMContentLoaded', () => {
     initUiSounds();
     attachUiClickSounds();
+    wireLogoutButton();
     startClock();
     fetchCameras();
     pollInterval = setInterval(fetchCameraStatus, 5000);
@@ -41,7 +42,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'ArrowRight') fullscreenPtzMove('right');
         if (e.key === ' ') fullscreenPtzStop();
     });
+
+    ensureAuthenticated();
 });
+
+async function ensureAuthenticated() {
+    try {
+        const res = await fetch(`${API_BASE}/api/auth/me`);
+        if (!res.ok) {
+            window.location.href = '/login.html';
+        }
+    } catch {
+        window.location.href = '/login.html';
+    }
+}
+
+function wireLogoutButton() {
+    const btn = document.getElementById('btn-logout');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+        try {
+            await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+        } catch (err) {
+            // ignore
+        }
+        window.location.href = '/login.html';
+    });
+}
 
 function initUiSounds() {
     uiSounds.click = new Audio('sounds/ui-click.wav');
@@ -65,7 +92,7 @@ function playUiSound(type = 'click') {
 
 function attachUiClickSounds() {
     document.addEventListener('click', (event) => {
-        const interactive = event.target.closest('.cam-btn, .ptz-btn, .nav-link, .btn-close-fullscreen, .cyber-btn, .rec-action-btn');
+        const interactive = event.target.closest('.cam-btn, .ptz-btn, .nav-link, .btn-close-fullscreen, .cyber-btn, .rec-action-btn, .btn-logout');
         if (!interactive) return;
         if (interactive.classList.contains('btn-fullscreen')) return; // handled with expand sound
         playUiSound('click');

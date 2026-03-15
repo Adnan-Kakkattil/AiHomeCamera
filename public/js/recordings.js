@@ -15,6 +15,7 @@ const uiSounds = {
 document.addEventListener('DOMContentLoaded', () => {
     initUiSounds();
     attachUiClickSounds();
+    wireLogoutButton();
     startClock();
     fetchRecordings();
 
@@ -39,7 +40,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Populate camera filter
     populateCameraFilter();
+    ensureAuthenticated();
 });
+
+async function ensureAuthenticated() {
+    try {
+        const res = await fetch(`${API_BASE}/api/auth/me`);
+        if (!res.ok) {
+            window.location.href = '/login.html';
+        }
+    } catch {
+        window.location.href = '/login.html';
+    }
+}
+
+function wireLogoutButton() {
+    const btn = document.getElementById('btn-logout');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+        try {
+            await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+        } catch (err) {
+            // ignore
+        }
+        window.location.href = '/login.html';
+    });
+}
 
 function initUiSounds() {
     uiSounds.click = new Audio('sounds/ui-click.wav');
@@ -62,7 +88,7 @@ function playUiSound(type = 'click') {
 
 function attachUiClickSounds() {
     document.addEventListener('click', (event) => {
-        const interactive = event.target.closest('.cyber-btn, .rec-action-btn, .nav-link, .btn-close-playback, .btn-cancel, .btn-danger, .recording-item');
+        const interactive = event.target.closest('.cyber-btn, .rec-action-btn, .nav-link, .btn-close-playback, .btn-cancel, .btn-danger, .recording-item, .btn-logout');
         if (!interactive) return;
         if (interactive.classList.contains('recording-item')) {
             playUiSound('expand');

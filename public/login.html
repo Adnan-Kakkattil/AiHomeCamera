@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Home Camera — Login</title>
+  <meta name="description" content="Secure login for AI Home Camera dashboard">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="scanline-overlay"></div>
+
+  <main class="login-page">
+    <section class="login-visual">
+      <img src="https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=1600&q=80" alt="Cyberpunk city illustration">
+      <div class="login-visual-caption">NEURAL SURVEILLANCE GRID</div>
+    </section>
+
+    <section class="login-panel">
+      <div class="login-card">
+        <div class="logo" style="margin-bottom: 14px;">
+          <div class="logo-icon">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+          </div>
+          <div class="logo-text">
+            <span class="logo-title">AI HOME<span class="accent">CAM</span></span>
+            <span class="logo-subtitle">AUTH GATEWAY</span>
+          </div>
+        </div>
+
+        <h1 class="login-title">SECURE LOGIN</h1>
+        <p class="login-subtitle">Authorized operators only.</p>
+
+        <form class="login-form" id="login-form">
+          <label class="login-label" for="email">EMAIL</label>
+          <input class="login-input" id="email" type="email" autocomplete="username" required>
+
+          <label class="login-label" for="password">PASSWORD</label>
+          <input class="login-input" id="password" type="password" autocomplete="current-password" required>
+
+          <div class="login-error" id="login-error"></div>
+
+          <button class="cam-btn login-submit" type="submit" id="btn-login">LOGIN</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/login.js"></script>
+</body>
+</html>

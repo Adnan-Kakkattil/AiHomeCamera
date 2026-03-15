@@ -136,6 +136,11 @@
       "port": 554
     }
   ],
+  "auth": {
+    "email": "contact.adnanks@gmail.com",
+    "password": "Adnan@66202",
+    "sessionHours": 24
+  },
   "serverPort": 3000,
   "recordingsDir": "./recordings",
   "streamsDir": "./streams"

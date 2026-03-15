@@ -25,6 +25,8 @@ const dataDir = path.resolve(path.join(__dirname, 'data'));
 // SQLite database (persistent local metadata + user actions)
 const dbPath = path.join(dataDir, 'camera_events.sqlite');
 const db = new sqlite3.Database(dbPath);
+const AUTH_COOKIE_NAME = 'ahc_auth';
+const authSessions = new Map(); // token -> { email, expiresAtMs }
 
 // Track active FFmpeg processes
 const streamProcesses = {};   // { camId: childProcess }
@@ -174,6 +176,78 @@ function parseJsonSafe(value, fallback = null) {
     } catch {
         return fallback;
     }
+}
+
+function getAuthConfig() {
+    return config.auth || {};
+}
+
+function parseCookies(req) {
+    const header = req.headers.cookie;
+    if (!header) return {};
+    return header.split(';').reduce((acc, part) => {
+        const [k, ...rest] = part.trim().split('=');
+        if (!k) return acc;
+        acc[k] = decodeURIComponent(rest.join('=') || '');
+        return acc;
+    }, {});
+}
+
+function cleanExpiredSessions() {
+    const now = Date.now();
+    for (const [token, session] of authSessions.entries()) {
+        if (!session || session.expiresAtMs <= now) {
+            authSessions.delete(token);
+        }
+    }
+}
+
+function getSessionFromRequest(req) {
+    cleanExpiredSessions();
+    const cookies = parseCookies(req);
+    const token = cookies[AUTH_COOKIE_NAME];
+    if (!token) return null;
+    const session = authSessions.get(token);
+    if (!session) return null;
+    if (session.expiresAtMs <= Date.now()) {
+        authSessions.delete(token);
+        return null;
+    }
+    return { token, ...session };
+}
+
+function issueSession(res, email) {
+    const authCfg = getAuthConfig();
+    const hours = Number(authCfg.sessionHours || 24);
+    const expiresAtMs = Date.now() + Math.max(1, hours) * 60 * 60 * 1000;
+    const token = crypto.randomBytes(24).toString('hex');
+    authSessions.set(token, { email, expiresAtMs });
+
+    const maxAgeSec = Math.floor((expiresAtMs - Date.now()) / 1000);
+    res.setHeader(
+        'Set-Cookie',
+        `${AUTH_COOKIE_NAME}=${token}; HttpOnly; Path=/; Max-Age=${maxAgeSec}; SameSite=Lax`
+    );
+}
+
+function clearSession(res, req) {
+    const session = getSessionFromRequest(req);
+    if (session?.token) authSessions.delete(session.token);
+    res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+}
+
+function requireAuthApi(req, res, next) {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: 'Unauthorized' });
+    req.authSession = session;
+    next();
+}
+
+function requireAuthPage(req, res, next) {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.redirect('/login.html');
+    req.authSession = session;
+    next();
 }
 
 function getPtzConfig(camera) {
@@ -873,11 +947,63 @@ function stopRecording(camId) {
 
 // ============== API Routes ==============
 
-// Serve static frontend
-app.use(express.static(path.join(__dirname, 'public')));
+// Public auth pages/assets
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+
+app.get('/login.html', (req, res) => {
+    const session = getSessionFromRequest(req);
+    if (session) return res.redirect('/');
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.get('/', requireAuthPage, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/recordings.html', requireAuthPage, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'recordings.html'));
+});
+
+// Auth endpoints
+app.post('/api/auth/login', (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const authCfg = getAuthConfig();
+    const configuredEmail = String(authCfg.email || '').trim().toLowerCase();
+    const configuredPassword = String(authCfg.password || '');
+
+    if (email !== configuredEmail || password !== configuredPassword) {
+        return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    issueSession(res, configuredEmail);
+    logUserAction('auth_login', null, { email: configuredEmail });
+    res.json({ success: true, email: configuredEmail });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    const session = getSessionFromRequest(req);
+    if (session?.email) {
+        logUserAction('auth_logout', null, { email: session.email });
+    }
+    clearSession(res, req);
+    res.json({ success: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ authenticated: false });
+    res.json({ authenticated: true, email: session.email });
+});
+
+// Protect all API routes below except /api/auth/*
+app.use('/api', (req, res, next) => {
+    if (req.path.startsWith('/auth/')) return next();
+    return requireAuthApi(req, res, next);
+});
 
 // Serve HLS streams
-app.use('/streams', express.static(streamsDir, {
+app.use('/streams', requireAuthPage, express.static(streamsDir, {
     setHeaders: (res, filePath) => {
         if (filePath.endsWith('.m3u8')) {
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
@@ -890,7 +1016,7 @@ app.use('/streams', express.static(streamsDir, {
 }));
 
 // Serve recordings
-app.use('/recordings-files', express.static(recordingsDir));
+app.use('/recordings-files', requireAuthPage, express.static(recordingsDir));
 
 // === Camera endpoints ===
 app.get('/api/cameras', (req, res) => {
