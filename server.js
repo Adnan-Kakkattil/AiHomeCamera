@@ -3,6 +3,7 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // Load config
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
@@ -21,13 +22,214 @@ const recordingsDir = path.resolve(config.recordingsDir);
 // Track active FFmpeg processes
 const streamProcesses = {};   // { camId: childProcess }
 const recordProcesses = {};   // { camId: { process, filename, startTime } }
+const resolvedRtspSources = {}; // { camId: { url, fingerprint, duplicate } }
 
 // ============== FFmpeg Stream Management ==============
 
-function startStream(camera) {
+function getRtspCandidates(camera) {
+    const baseCandidates = [];
+
+    if (typeof camera.rtspUrl === 'string' && camera.rtspUrl.trim()) {
+        baseCandidates.push(camera.rtspUrl.trim());
+    }
+
+    if (Array.isArray(camera.rtspCandidates)) {
+        camera.rtspCandidates.forEach(url => {
+            if (typeof url === 'string' && url.trim()) {
+                baseCandidates.push(url.trim());
+            }
+        });
+    }
+
+    const candidates = [];
+    baseCandidates.forEach((url) => {
+        candidates.push(url);
+        const authUrl = applyRtspAuth(url, camera);
+        if (authUrl !== url) candidates.push(authUrl);
+    });
+
+    return [...new Set(candidates)];
+}
+
+function getCameraRtspUrl(camera) {
+    return resolvedRtspSources[camera.id]?.url || camera.rtspUrl;
+}
+
+function appendCameraVideoFilterArgs(camera, args) {
+    if (typeof camera.ffmpegVideoFilter === 'string' && camera.ffmpegVideoFilter.trim()) {
+        args.push('-vf', camera.ffmpegVideoFilter.trim());
+    }
+}
+
+function maskRtspCredentials(rtspUrl) {
+    try {
+        const parsed = new URL(rtspUrl);
+        if (parsed.username) parsed.username = '***';
+        if (parsed.password) parsed.password = '***';
+        return parsed.toString();
+    } catch (err) {
+        return rtspUrl;
+    }
+}
+
+function applyRtspAuth(rtspUrl, camera) {
+    const username = camera.username || camera.authUsername;
+    const password = camera.password || camera.authPassword;
+    if (!username) return rtspUrl;
+
+    try {
+        const parsed = new URL(rtspUrl);
+        if (!parsed.username) parsed.username = username;
+        if (!parsed.password && password) parsed.password = password;
+        return parsed.toString();
+    } catch (err) {
+        return rtspUrl;
+    }
+}
+
+function probeRtspCandidate(rtspUrl, timeoutMs = 7000) {
+    return new Promise((resolve) => {
+        const probeDir = path.join(streamsDir, '_probe');
+        if (!fs.existsSync(probeDir)) fs.mkdirSync(probeDir, { recursive: true });
+
+        const probeFile = path.join(
+            probeDir,
+            `probe_${Date.now()}_${Math.random().toString(16).slice(2)}.jpg`
+        );
+
+        const args = [
+            '-y',
+            '-loglevel', 'error',
+            '-rtsp_transport', 'tcp',
+            '-i', rtspUrl,
+            '-frames:v', '1',
+            '-q:v', '2',
+            probeFile
+        ];
+
+        let done = false;
+        let stderrText = '';
+        const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+        const finish = (result) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            try {
+                if (fs.existsSync(probeFile)) fs.unlinkSync(probeFile);
+            } catch (e) { }
+            resolve(result);
+        };
+
+        const timer = setTimeout(() => {
+            try { proc.kill('SIGKILL'); } catch (e) { }
+            finish({ ok: false, url: rtspUrl, reason: 'timeout' });
+        }, timeoutMs + 1000);
+
+        proc.stderr.on('data', (d) => { stderrText += d.toString(); });
+
+        proc.on('error', (err) => {
+            finish({ ok: false, url: rtspUrl, reason: err.message });
+        });
+
+        proc.on('close', (code) => {
+            if (fs.existsSync(probeFile)) {
+                const buf = fs.readFileSync(probeFile);
+                const fingerprint = crypto.createHash('sha1').update(buf).digest('hex');
+                finish({ ok: true, url: rtspUrl, fingerprint });
+            } else {
+                const cleanErr = stderrText.trim().split('\n').slice(-1)[0] || `exit_${code}`;
+                finish({ ok: false, url: rtspUrl, reason: cleanErr });
+            }
+        });
+    });
+}
+
+async function resolveCameraRtspSource(camera) {
+    if (camera.disableRtspProbe) {
+        const direct = {
+            ip: camera.ip,
+            url: camera.rtspUrl,
+            fingerprint: null,
+            duplicate: false
+        };
+        resolvedRtspSources[camera.id] = direct;
+        console.log(`[RTSP] ${camera.name} using configured URL ${camera.rtspUrl}`);
+        return direct;
+    }
+
+    const existing = resolvedRtspSources[camera.id];
+    if (existing?.url) return existing;
+
+    const candidates = getRtspCandidates(camera);
+    if (candidates.length === 0) {
+        throw new Error(`No RTSP URLs configured for ${camera.name}`);
+    }
+
+    let firstWorking = null;
+
+    for (const candidate of candidates) {
+        const result = await probeRtspCandidate(candidate);
+        if (!result.ok) {
+            console.log(`[RTSP] Candidate failed for ${camera.name}: ${candidate} (${result.reason})`);
+            continue;
+        }
+
+        if (!firstWorking) firstWorking = result;
+
+        const sameIpFingerprints = Object.values(resolvedRtspSources)
+            .filter(src => src?.ip === camera.ip && src.fingerprint)
+            .map(src => src.fingerprint);
+
+        const isDuplicate = sameIpFingerprints.includes(result.fingerprint);
+        if (!isDuplicate) {
+            const resolved = {
+                ip: camera.ip,
+                url: result.url,
+                fingerprint: result.fingerprint,
+                duplicate: false
+            };
+            resolvedRtspSources[camera.id] = resolved;
+            console.log(`[RTSP] ${camera.name} resolved to ${result.url}`);
+            return resolved;
+        }
+    }
+
+    if (firstWorking) {
+        const fallback = {
+            ip: camera.ip,
+            url: firstWorking.url,
+            fingerprint: firstWorking.fingerprint,
+            duplicate: true
+        };
+        resolvedRtspSources[camera.id] = fallback;
+        console.warn(`[RTSP] ${camera.name} fallback to duplicate stream: ${firstWorking.url}`);
+        return fallback;
+    }
+
+    const directFallback = {
+        ip: camera.ip,
+        url: camera.rtspUrl,
+        fingerprint: null,
+        duplicate: false
+    };
+    resolvedRtspSources[camera.id] = directFallback;
+    console.warn(`[RTSP] ${camera.name} could not be probed; using primary URL ${camera.rtspUrl}`);
+    return directFallback;
+}
+
+async function startStream(camera) {
     if (streamProcesses[camera.id]) {
         console.log(`[STREAM] ${camera.name} already streaming`);
         return;
+    }
+
+    let rtspSource = getCameraRtspUrl(camera);
+    try {
+        const resolved = await resolveCameraRtspSource(camera);
+        rtspSource = resolved.url;
+    } catch (err) {
+        console.error(`[RTSP] Resolve failed for ${camera.name}: ${err.message}`);
     }
 
     const camStreamDir = path.join(streamsDir, camera.id);
@@ -42,7 +244,12 @@ function startStream(camera) {
         '-fflags', '+genpts+discardcorrupt',
         '-rtsp_transport', 'tcp',
         '-use_wallclock_as_timestamps', '1',
-        '-i', camera.rtspUrl,
+        '-i', rtspSource
+    ];
+
+    appendCameraVideoFilterArgs(camera, args);
+
+    args.push(
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
@@ -56,7 +263,7 @@ function startStream(camera) {
         '-hls_flags', 'delete_segments+append_list',
         '-hls_allow_cache', '0',
         path.join(camStreamDir, 'stream.m3u8')
-    ];
+    );
 
     console.log(`[STREAM] Starting stream for ${camera.name}: ffmpeg ${args.join(' ')}`);
 
@@ -106,11 +313,17 @@ function startRecording(camera) {
     const filename = `${camera.id}_${timestamp}.mp4`;
     const filepath = path.join(recordingsDir, filename);
 
+    const rtspSource = getCameraRtspUrl(camera);
     const args = [
         '-fflags', '+genpts+discardcorrupt',
         '-rtsp_transport', 'tcp',
         '-use_wallclock_as_timestamps', '1',
-        '-i', camera.rtspUrl,
+        '-i', rtspSource
+    ];
+
+    appendCameraVideoFilterArgs(camera, args);
+
+    args.push(
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
@@ -118,7 +331,7 @@ function startRecording(camera) {
         '-an',
         '-movflags', '+frag_keyframe+empty_moov',
         filepath
-    ];
+    );
 
     console.log(`[RECORD] Starting recording for ${camera.name}: ${filename}`);
 
@@ -187,7 +400,13 @@ app.use('/recordings-files', express.static(recordingsDir));
 // === Camera endpoints ===
 app.get('/api/cameras', (req, res) => {
     const cameras = config.cameras.map(c => ({
-        ...c,
+        id: c.id,
+        name: c.name,
+        ip: c.ip,
+        port: c.port,
+        activeRtspUrl: maskRtspCredentials(getCameraRtspUrl(c)),
+        rtspResolved: !!resolvedRtspSources[c.id],
+        rtspDuplicateFallback: !!resolvedRtspSources[c.id]?.duplicate,
         streaming: !!streamProcesses[c.id],
         recording: !!recordProcesses[c.id],
         recordingInfo: recordProcesses[c.id] ? {
@@ -285,15 +504,21 @@ app.post('/api/cameras/:id/screenshot', (req, res) => {
     const filename = `screenshot_${cam.id}_${timestamp}.jpg`;
     const filepath = path.join(recordingsDir, filename);
 
+    const rtspSource = getCameraRtspUrl(cam);
     const args = [
         '-fflags', '+genpts+discardcorrupt',
         '-rtsp_transport', 'tcp',
         '-use_wallclock_as_timestamps', '1',
-        '-i', cam.rtspUrl,
+        '-i', rtspSource
+    ];
+
+    appendCameraVideoFilterArgs(cam, args);
+
+    args.push(
         '-frames:v', '1',
         '-q:v', '2',
         filepath
-    ];
+    );
 
     const proc = spawn('ffmpeg', args);
     proc.on('close', (code) => {

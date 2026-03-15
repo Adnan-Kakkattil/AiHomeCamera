@@ -5,13 +5,21 @@
       "name": "Device 1 - Lens A",
       "ip": "192.168.31.135",
       "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_0",
+      "ffmpegVideoFilter": "crop=in_w:in_h/2:0:0",
+      "disableRtspProbe": true,
+      "username": "admin",
+      "password": "Adnan@66202",
       "port": 554
     },
     {
       "id": "cam2",
       "name": "Device 1 - Lens B",
       "ip": "192.168.31.135",
-      "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_1",
+      "rtspUrl": "rtsp://192.168.31.135:554/live/ch00_0",
+      "ffmpegVideoFilter": "crop=in_w:in_h/2:0:in_h/2",
+      "disableRtspProbe": true,
+      "username": "admin",
+      "password": "Adnan@66202",
       "port": 554
     },
     {
@@ -19,13 +27,21 @@
       "name": "Device 2 - Lens A",
       "ip": "192.168.31.94",
       "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_0",
+      "ffmpegVideoFilter": "crop=in_w:in_h/2:0:0",
+      "disableRtspProbe": true,
+      "username": "admin",
+      "password": "Adnan@66202",
       "port": 554
     },
     {
       "id": "cam4",
       "name": "Device 2 - Lens B",
       "ip": "192.168.31.94",
-      "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_1",
+      "rtspUrl": "rtsp://192.168.31.94:554/live/ch00_0",
+      "ffmpegVideoFilter": "crop=in_w:in_h/2:0:in_h/2",
+      "disableRtspProbe": true,
+      "username": "admin",
+      "password": "Adnan@66202",
       "port": 554
     }
   ],
