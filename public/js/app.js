@@ -8,6 +8,7 @@ let hlsInstances = {};
 let pollInterval = null;
 let motionEventsInterval = null;
 let activeFullscreenCamId = null;
+let selectedPtzCamId = null;
 let fullscreenTransitioning = false;
 const uiSounds = {
     click: null,
@@ -32,15 +33,21 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeFullscreen();
 
-        // Keyboard PTZ in fullscreen
-        const modalActive = document.getElementById('fullscreen-modal')?.classList.contains('active');
-        if (!modalActive) return;
+        const isMoveKey = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key);
+        const isStopKey = e.key === ' ';
+        if (!isMoveKey && !isStopKey) return;
 
-        if (e.key === 'ArrowUp') fullscreenPtzMove('up');
-        if (e.key === 'ArrowDown') fullscreenPtzMove('down');
-        if (e.key === 'ArrowLeft') fullscreenPtzMove('left');
-        if (e.key === 'ArrowRight') fullscreenPtzMove('right');
-        if (e.key === ' ') fullscreenPtzStop();
+        const targetCamId = activeFullscreenCamId || selectedPtzCamId;
+        if (!targetCamId) return;
+        const targetCam = cameras.find(c => c.id === targetCamId);
+        if (!targetCam || !targetCam.ptzEnabled) return;
+
+        e.preventDefault();
+        if (e.key === 'ArrowUp') ptzMove(targetCamId, 'up');
+        if (e.key === 'ArrowDown') ptzMove(targetCamId, 'down');
+        if (e.key === 'ArrowLeft') ptzMove(targetCamId, 'left');
+        if (e.key === 'ArrowRight') ptzMove(targetCamId, 'right');
+        if (e.key === ' ') ptzStop(targetCamId);
     });
 
     ensureAuthenticated();
@@ -242,9 +249,13 @@ function renderCameraGrid() {
           ${cam.motionEnabled ? 'MOTION ON' : 'MOTION OFF'}
         </button>
       </div>
-      ${renderPtzControls(cam)}
     `;
         grid.appendChild(card);
+
+        card.addEventListener('click', (event) => {
+            if (event.target.closest('.cam-btn')) return;
+            selectPtzCamera(cam.id);
+        });
 
         // Initialize HLS stream
         initHLSStream(cam.id);
@@ -252,6 +263,15 @@ function renderCameraGrid() {
         // Start timestamp
         updateTimestamp(cam.id);
     });
+
+    if (selectedPtzCamId) {
+        const card = document.getElementById(`card-${selectedPtzCamId}`);
+        if (card) {
+            card.classList.add('ptz-selected');
+        } else {
+            selectedPtzCamId = null;
+        }
+    }
 
     renderMotionAlertCard();
 }
@@ -275,21 +295,19 @@ function renderMotionAlertCard() {
     grid.appendChild(card);
 }
 
-function renderPtzControls(cam) {
-    if (!cam.ptzEnabled) return '';
+function selectPtzCamera(camId) {
+    const cam = cameras.find(c => c.id === camId);
+    if (!cam || !cam.ptzEnabled) {
+        selectedPtzCamId = null;
+        document.querySelectorAll('.camera-card.ptz-selected').forEach(el => el.classList.remove('ptz-selected'));
+        return;
+    }
 
-    return `
-      <div class="camera-ptz">
-        <div class="ptz-title">PTZ CONTROL</div>
-        <div class="ptz-grid">
-          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'up')" title="Move Up">▲</button>
-          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'left')" title="Move Left">◀</button>
-          <button class="ptz-btn ptz-stop" onclick="ptzStop('${cam.id}')" title="Stop">■</button>
-          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'right')" title="Move Right">▶</button>
-          <button class="ptz-btn" onclick="ptzMove('${cam.id}', 'down')" title="Move Down">▼</button>
-        </div>
-      </div>
-    `;
+    selectedPtzCamId = camId;
+    document.querySelectorAll('.camera-card.ptz-selected').forEach(el => el.classList.remove('ptz-selected'));
+    const card = document.getElementById(`card-${camId}`);
+    if (card) card.classList.add('ptz-selected');
+    showToast(`PTZ keyboard active: ${cam.name}`, 'info');
 }
 
 // ============== HLS Stream ==============
@@ -608,7 +626,7 @@ function openFullscreen(camId) {
 
     title.textContent = cam.name.toUpperCase();
     activeFullscreenCamId = camId;
-    updateFullscreenPtzControls(cam);
+    selectPtzCamera(camId);
 
     // Clone stream to fullscreen video
     const hlsUrl = `${API_BASE}/streams/${camId}/stream.m3u8`;
@@ -682,7 +700,6 @@ function closeFullscreen() {
         video.src = '';
         modal.classList.remove('active');
         activeFullscreenCamId = null;
-        updateFullscreenPtzControls(null);
     };
 
     if (!source || prefersReducedMotion) {
@@ -723,27 +740,6 @@ function closeFullscreen() {
         cleanupAndClose();
         fullscreenTransitioning = false;
     }, 430);
-}
-
-function updateFullscreenPtzControls(cam) {
-    const ptzPanel = document.getElementById('fullscreen-ptz');
-    if (!ptzPanel) return;
-
-    if (cam && cam.ptzEnabled) {
-        ptzPanel.classList.remove('hidden');
-    } else {
-        ptzPanel.classList.add('hidden');
-    }
-}
-
-function fullscreenPtzMove(direction) {
-    if (!activeFullscreenCamId) return;
-    ptzMove(activeFullscreenCamId, direction);
-}
-
-function fullscreenPtzStop() {
-    if (!activeFullscreenCamId) return;
-    ptzStop(activeFullscreenCamId);
 }
 
 // ============== Timestamp ==============

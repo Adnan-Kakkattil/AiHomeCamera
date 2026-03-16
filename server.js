@@ -482,6 +482,8 @@ async function startMotionDetection(camera) {
 
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     motionProcesses[camera.id] = proc;
+    // Warmup window avoids startup false-positive motion events.
+    motionLastTriggerAt[camera.id] = Date.now();
     console.log(`[MOTION] Started detector for ${camera.name}`);
 
     proc.stderr.on('data', (data) => {

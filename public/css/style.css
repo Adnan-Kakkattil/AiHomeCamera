@@ -443,6 +443,11 @@ body::before {
   box-shadow: 0 0 30px rgba(255, 51, 85, 0.1);
 }
 
+.camera-card.ptz-selected {
+  border-color: rgba(0, 240, 255, 0.55);
+  box-shadow: 0 0 34px rgba(0, 240, 255, 0.16), inset 0 0 20px rgba(0, 240, 255, 0.05);
+}
+
 /* Camera header */
 .camera-header {
   display: flex;

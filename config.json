@@ -13,7 +13,7 @@
         "sd": { "fps": 10, "gop": 20, "crf": 30, "scaleWidth": 960 }
       },
       "motionDetection": {
-        "enabled": true,
+        "enabled": false,
         "threshold": 0.08,
         "cooldownMs": 15000,
         "recordDurationSec": 120,
@@ -71,7 +71,7 @@
         "sd": { "fps": 10, "gop": 20, "crf": 30, "scaleWidth": 960 }
       },
       "motionDetection": {
-        "enabled": true,
+        "enabled": false,
         "threshold": 0.08,
         "cooldownMs": 15000,
         "recordDurationSec": 120,
